@@ -47,6 +47,8 @@ export default function LoginPage() {
       setToken(data.access);
 
       localStorage.setItem("access_token", data.access);
+      localStorage.setItem("username", username);
+
       alert("Login successful!");
       setLoading(false);
 

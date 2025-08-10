@@ -1,10 +1,9 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from rest_framework.permissions import AllowAny
+from .models import Policyholder
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
-    permission_classes = [AllowAny]
 
     class Meta:
         model = User
@@ -17,3 +16,9 @@ class RegisterSerializer(serializers.ModelSerializer):
             email=validated_data.get('email', '')
         )
         return user
+
+
+class PolicyholderSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Policyholder
+        fields = '__all__'

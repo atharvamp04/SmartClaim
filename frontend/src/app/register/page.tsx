@@ -34,24 +34,41 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/detection/register/", {
+      // 1. Register
+      const registerRes = await fetch("http://127.0.0.1:8000/api/detection/register/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email, password }),
       });
 
-      if (!res.ok) {
-        const data = await res.json();
+      if (!registerRes.ok) {
+        const data = await registerRes.json();
         setError(data.detail || "Registration failed");
         setLoading(false);
         return;
       }
 
-      alert("Registration successful! Please login.");
+      // 2. Auto-login after successful registration
+      const loginRes = await fetch("http://127.0.0.1:8000/api/auth/login/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (!loginRes.ok) {
+        setError("Login after registration failed");
+        setLoading(false);
+        return;
+      }
+
+      const loginData = await loginRes.json();
+
+      // 3. Save tokens in localStorage
+      localStorage.setItem("access_token", loginData.access);
+      localStorage.setItem("refresh_token", loginData.refresh);
+
       setLoading(false);
-      router.push("/login");
+      router.push("/policyholder"); // Redirect to policyholder form after login
     } catch (err) {
       setError("An error occurred. Please try again.");
       setLoading(false);
@@ -109,10 +126,7 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label
-                htmlFor="confirmPassword"
-                className="block mb-1 font-medium"
-              >
+              <label htmlFor="confirmPassword" className="block mb-1 font-medium">
                 Confirm Password
               </label>
               <Input
