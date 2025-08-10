@@ -1,0 +1,65 @@
+# =====================
+# General
+# =====================
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+# =====================
+# Python / Django
+# =====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+venv/
+.env
+*.sqlite3
+db.sqlite3
+
+# Django specific
+/staticfiles/
+/media/
+/*.pot
+
+# =====================
+# Node / Next.js
+# =====================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.next/
+out/
+dist/
+.cache/
+
+# =====================
+# Environment files
+# =====================
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env
+
+# =====================
+# VSCode / IDE
+# =====================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# =====================
+# OS specific
+# =====================
+ehthumbs.db
+Icon?
