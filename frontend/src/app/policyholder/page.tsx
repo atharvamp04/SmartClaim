@@ -115,7 +115,7 @@ export default function PolicyholderForm() {
     try {
       const token = localStorage.getItem("access_token");
 
-      const res = await fetch("http://127.0.0.1:8000/api/detection/policyholders/", {
+      const res = await fetch("http://127.0.0.1:8000/api/detection/policyholder/create/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -44,7 +44,7 @@ export default function HomePage() {
 
   const fetchUserData = async (username: string, token: string) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/detection/policyholders/${username}/`, {
+      const res = await fetch(`http://127.0.0.1:8000/api/detection/policyholder/${username}/`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -69,6 +69,11 @@ export default function HomePage() {
     localStorage.removeItem("access_token");
     localStorage.removeItem("username");
     router.push("/login");
+  };
+
+  // Navigate to claim page with policyholder username as param (optional)
+  const handleClaim = () => {
+    router.push(`/claim?username=${userData?.username}`);
   };
 
   if (loading) {
@@ -117,6 +122,13 @@ export default function HomePage() {
               );
             })}
         </dl>
+
+        {/* Claim Button at the bottom of the card */}
+        <div className="mt-8 text-center">
+          <Button onClick={handleClaim} className="px-8 py-3 text-lg font-semibold">
+            Make a Claim
+          </Button>
+        </div>
       </div>
 
       <div className="mt-8 text-center">
