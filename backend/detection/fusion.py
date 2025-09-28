@@ -189,6 +189,234 @@ def load_preprocessing_pipeline(pipeline_filename):
         print("   Try: pip install scikit-learn==1.5.2")
         return None
 
+
+def safe_preprocess_inference_data(df_raw, pipeline):
+    """
+    Preprocess inference DataFrame safely.
+    Ensures categorical columns are strings and numeric columns are numeric.
+    """
+    if pipeline is None:
+        print("No preprocessing pipeline loaded")
+        return None
+
+    try:
+        # Create a copy to avoid modifying the original
+        df = df_raw.copy()
+        
+        # List of categorical columns (update as per your training pipeline)
+        cat_cols = [
+            'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
+            'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
+            'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
+            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
+            'Days_Policy_Accident', 'Days_Policy_Claim',
+            'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
+            'AgeOfVehicle', 'AgeOfPolicyHolder'  # Added these as they seem categorical
+        ]
+        
+        # Numeric columns
+        num_cols = [
+            'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
+            'DriverRating', 'Age', 'NumberOfCars'
+        ]
+        
+        print(f"📊 Processing data with shape: {df.shape}")
+        print(f"📊 Columns: {list(df.columns)}")
+        
+        # First, handle numeric columns and convert to proper numeric types
+        for col in num_cols:
+            if col in df.columns:
+                # Convert to numeric, replacing non-numeric with NaN
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                print(f"   ✅ Numeric column {col}: {df[col].dtype}")
+        
+        # Fill NaNs in numeric columns with appropriate defaults
+        numeric_defaults = {
+            'WeekOfMonth': 1,
+            'WeekOfMonthClaimed': 1, 
+            'Year': 2000,
+            'Deductible': 0,
+            'DriverRating': 1,
+            'Age': 25,
+            'NumberOfCars': 1
+        }
+        
+        for col, default_val in numeric_defaults.items():
+            if col in df.columns:
+                df[col].fillna(default_val, inplace=True)
+        
+        # Handle categorical columns - convert everything to string and handle nulls
+        for col in cat_cols:
+            if col in df.columns:
+                # First convert to string, handling any None/NaN values
+                df[col] = df[col].astype(str)
+                # Replace 'nan', 'None', empty strings with 'missing'
+                df[col] = df[col].replace(['nan', 'None', '', 'null', 'NaN'], 'missing')
+                print(f"   ✅ Categorical column {col}: unique values = {df[col].nunique()}")
+        
+        # Final safety check - ensure no remaining NaN values
+        if df.isnull().any().any():
+            print("⚠️ Warning: Found remaining NaN values, filling with defaults...")
+            # Fill remaining NaNs based on column type
+            for col in df.columns:
+                if col in num_cols:
+                    df[col].fillna(0, inplace=True)
+                else:
+                    df[col].fillna('missing', inplace=True)
+        
+        print(f"✅ Data preprocessing complete. Final shape: {df.shape}")
+        print(f"✅ Data types: {df.dtypes.to_dict()}")
+        
+        # Transform using the pipeline
+        X_processed = pipeline.transform(df)
+        
+        # Convert sparse matrix to dense if needed
+        if hasattr(X_processed, "toarray"):
+            X_processed = X_processed.toarray()
+            
+        print(f"✅ Pipeline transformation complete. Output shape: {X_processed.shape}")
+        return X_processed.astype(np.float32)
+
+    except Exception as e:
+        print(f"❌ Error in preprocessing: {e}")
+        print(f"❌ Error type: {type(e)}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        return None
+
+
+def debug_pipeline_categories(pipeline):
+    """
+    Debug function to inspect the categories in the loaded pipeline
+    """
+    try:
+        # Access the ColumnTransformer
+        if hasattr(pipeline, 'named_steps') and 'preprocessor' in pipeline.named_steps:
+            preprocessor = pipeline.named_steps['preprocessor']
+        elif hasattr(pipeline, 'transformers_'):
+            preprocessor = pipeline
+        else:
+            print("Cannot find preprocessor in pipeline")
+            return
+            
+        # Find the OneHotEncoder
+        for name, transformer, columns in preprocessor.transformers_:
+            if hasattr(transformer, 'categories_'):
+                print(f"\n🔍 Transformer: {name}")
+                print(f"   Columns: {columns}")
+                for i, categories in enumerate(transformer.categories_):
+                    print(f"   Column {i} categories: {categories[:5]}...")  # Show first 5
+                    
+    except Exception as e:
+        print(f"Error debugging pipeline: {e}")
+
+
+def create_emergency_preprocessing_pipeline():
+    """
+    Create a new preprocessing pipeline as emergency fallback
+    This should match your original training pipeline structure
+    """
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.pipeline import Pipeline
+    
+    # Define column types (adjust based on your training data)
+    categorical_columns = [
+        'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
+        'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
+        'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
+        'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
+        'Days_Policy_Accident', 'Days_Policy_Claim',
+        'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
+        'AgeOfVehicle', 'AgeOfPolicyHolder'
+    ]
+    
+    numerical_columns = [
+        'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
+        'DriverRating', 'Age', 'NumberOfCars'
+    ]
+    
+    # Create preprocessors
+    numerical_transformer = StandardScaler()
+    categorical_transformer = OneHotEncoder(
+        drop='first',
+        sparse_output=False,
+        handle_unknown='ignore'  # This is crucial for inference
+    )
+    
+    # Combine preprocessors
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numerical_transformer, numerical_columns),
+            ('cat', categorical_transformer, categorical_columns)
+        ]
+    )
+    
+    return preprocessor
+
+
+def emergency_preprocess_data(df_raw):
+    """
+    Emergency preprocessing without using the saved pipeline
+    """
+    try:
+        df = df_raw.copy()
+        
+        # Create and fit emergency pipeline on the inference data itself
+        emergency_pipeline = create_emergency_preprocessing_pipeline()
+        
+        # Clean the data first
+        categorical_columns = [
+            'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
+            'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
+            'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
+            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
+            'Days_Policy_Accident', 'Days_Policy_Claim',
+            'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
+            'AgeOfVehicle', 'AgeOfPolicyHolder'
+        ]
+        
+        numerical_columns = [
+            'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
+            'DriverRating', 'Age', 'NumberOfCars'
+        ]
+        
+        # Clean numerical columns
+        for col in numerical_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Clean categorical columns
+        for col in categorical_columns:
+            if col in df.columns:
+                df[col] = df[col].astype(str).replace(['nan', 'None', ''], 'Unknown')
+        
+        # Fit and transform (only for emergency use)
+        # Note: This won't give you the same feature space as your trained model
+        X_processed = emergency_pipeline.fit_transform(df)
+        
+        print(f"⚠️ Emergency preprocessing completed. Shape: {X_processed.shape}")
+        print("⚠️ WARNING: This may not match your trained model's feature space!")
+        
+        return X_processed.astype(np.float32)
+        
+    except Exception as e:
+        print(f"❌ Emergency preprocessing also failed: {e}")
+        return None
+
+
+def safe_preprocess_with_fallback(df_raw, pipeline):
+    """
+    Try normal preprocessing first, fall back to emergency preprocessing
+    """
+    # Try the robust preprocessing first
+    result = safe_preprocess_inference_data(df_raw, pipeline)
+    
+    if result is None:
+        print("\n🚨 Normal preprocessing failed, trying emergency fallback...")
+        result = emergency_preprocess_data(df_raw)
+        
+    return result
 # -------------------------------
 # 7. Tabular Data Preprocessing using saved sklearn pipeline
 # -------------------------------
@@ -207,6 +435,30 @@ def preprocess_tabular_data_with_pipeline(df_raw, pipeline=None, pipeline_path=N
             print("No valid preprocessing pipeline available")
             return None
         
+        # --- FIX: Ensure correct types for pipeline ---
+        cat_cols = [
+            'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
+            'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
+            'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
+            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
+            'Days_Policy_Accident', 'Days_Policy_Claim',
+            'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim'
+        ]
+        for col in cat_cols:
+            if col in df_raw.columns:
+                df_raw[col] = df_raw[col].astype(str)
+        
+        # Convert numeric columns
+        num_cols = ['WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
+                    'DriverRating', 'Age', 'NumberOfCars']
+        for col in num_cols:
+            if col in df_raw.columns:
+                df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce')
+        
+        # Handle any remaining NaNs (optional, depending on your pipeline)
+        df_raw.fillna('missing', inplace=True)  # categorical fallback
+        df_raw.fillna(0, inplace=True)          # numeric fallback
+        
         X_processed = pipeline.transform(df_raw)
         # Convert sparse matrix to dense if needed
         if hasattr(X_processed, "toarray"):
@@ -215,6 +467,7 @@ def preprocess_tabular_data_with_pipeline(df_raw, pipeline=None, pipeline_path=N
     except Exception as e:
         print(f"Error preprocessing tabular data: {e}")
         return None
+
 
 # -------------------------------
 # 8. Feature Extraction and Prediction Functions
