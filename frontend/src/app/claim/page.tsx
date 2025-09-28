@@ -1,5 +1,10 @@
 "use client";
 
+//import jsPDF from "jspdf";
+//import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
+
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -207,6 +212,99 @@ export default function ClaimPage() {
       {label}
     </button>
   );
+
+const generatePDF = async (formData: {
+  username: string;
+  accident_date: string;
+  claim_amount: string;
+  claim_description?: string;
+}, result: any) => {
+  if (!result) return;
+
+  // Dynamic imports
+  const { default: jsPDF } = await import("jspdf");
+  await import("jspdf-autotable"); // patch autoTable
+
+  const doc = new jsPDF("p", "pt", "a4");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let yOffset = 40;
+
+  // Title
+  doc.setFontSize(18);
+  doc.setFont("helvetica", "bold");
+  doc.text("Insurance Claim Report", pageWidth / 2, yOffset, { align: "center" });
+  yOffset += 30;
+
+  // Policyholder info
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Policyholder: ${formData.username}`, 40, yOffset);
+  yOffset += 20;
+  doc.text(`Accident Date: ${formData.accident_date}`, 40, yOffset);
+  yOffset += 20;
+  doc.text(`Claim Amount: ${formData.claim_amount}`, 40, yOffset);
+  yOffset += 30;
+
+  // Fraud detection summary
+  doc.setFont("helvetica", "bold");
+  doc.text("Fraud Detection Summary", 40, yOffset);
+  doc.setFont("helvetica", "normal");
+  yOffset += 20;
+  doc.text(`Fraud Detected: ${result.fraud_detected ? "YES" : "NO"}`, 40, yOffset);
+  yOffset += 20;
+  doc.text(`Confidence: ${(result.confidence * 100).toFixed(1)}%`, 40, yOffset);
+  yOffset += 30;
+
+  // Damage image (if available)
+  if (result.damage_detection?.annotated_image_base64) {
+    const imgData = "data:image/jpeg;base64," + result.damage_detection.annotated_image_base64;
+    try {
+      const imgProps = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.src = imgData;
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+      });
+
+      const imgWidth = pageWidth - 80; // margin
+      const scale = imgWidth / imgProps.width;
+      const imgHeight = imgProps.height * scale;
+      doc.addImage(imgData, "JPEG", 40, yOffset, imgWidth, imgHeight);
+      yOffset += imgHeight + 20;
+    } catch (err) {
+      console.error("Error loading image for PDF:", err);
+    }
+  }
+
+  // Tabular data
+  doc.setFont("helvetica", "bold");
+  doc.text("Tabular Analysis", 40, yOffset);
+  yOffset += 20;
+  doc.setFont("helvetica", "normal");
+
+  const tableData = result.detailed_calculations?.tabular_analysis?.individual_model_predictions || [];
+  if (tableData.length > 0) {
+    doc.autoTable({
+      startY: yOffset,
+      head: [["Model Name", "No Fraud %", "Fraud %"]],
+      body: tableData.map((m: any) => [
+        m.model_name,
+        (m.no_fraud_probability * 100).toFixed(1),
+        (m.fraud_probability * 100).toFixed(1),
+      ]),
+      theme: "grid",
+      headStyles: { fillColor: [30, 144, 255] },
+      styles: { fontSize: 10 },
+      margin: { left: 40, right: 40 },
+    });
+  }
+
+  // Save PDF
+  doc.save(`Claim_Report_${formData.username}.pdf`);
+};
+
+
+
 
   return (
     <div className="max-w-7xl mx-auto p-8 mt-10">
@@ -785,7 +883,11 @@ export default function ClaimPage() {
           )}
 
           {result && (
+            
             <div className="text-center pt-4">
+              <button onClick={() => generatePDF(formData, result)} className="btn btn-primary">
+                 Generate PDF
+              </button>   
               <Button 
                 onClick={() => {
                   setResult(null);
