@@ -2,8 +2,8 @@
 from django.urls import path
 from .views import (
     # ML Prediction Views
-
-    predict_claim,  # Add this import
+    predict_claim,  # ✅ This exists in views.py
+    # predict_claim_with_calculations,  # ❌ REMOVED - doesn't exist
     
     # Authentication & User Views
     RegisterView,
@@ -19,7 +19,7 @@ from .views import (
 
 urlpatterns = [
     # ML Prediction endpoints
-    path('predict-claim/', predict_claim, name='predict_claim'),  # Add this line - Predict using username + image
+    path('predict-claim/', predict_claim, name='predict_claim'),  # ✅ Main prediction endpoint
     
     # Authentication endpoints
     path('register/', RegisterView.as_view(), name='register'),

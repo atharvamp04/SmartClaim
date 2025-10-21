@@ -192,8 +192,8 @@ def load_preprocessing_pipeline(pipeline_filename):
 
 def safe_preprocess_inference_data(df_raw, pipeline):
     """
-    Preprocess inference DataFrame safely.
-    Ensures categorical columns are strings and numeric columns are numeric.
+    Preprocess inference DataFrame to exactly match the training pipeline format.
+    This matches the pipeline created in your training script.
     """
     if pipeline is None:
         print("No preprocessing pipeline loaded")
@@ -203,220 +203,274 @@ def safe_preprocess_inference_data(df_raw, pipeline):
         # Create a copy to avoid modifying the original
         df = df_raw.copy()
         
-        # List of categorical columns (update as per your training pipeline)
-        cat_cols = [
+        print(f"📊 Processing inference data with shape: {df.shape}")
+        print(f"📊 Input columns: {list(df.columns)}")
+        
+        # Define the exact column categories as used in training
+        ordinal_features = [
+            'Days_Policy_Accident',
+            'Days_Policy_Claim', 
+            'PastNumberOfClaims',
+            'AgeOfVehicle',
+            'AgeOfPolicyHolder',
+            'NumberOfSuppliments',
+            'AddressChange_Claim'
+        ]
+        
+        # Define valid categories for ordinal features (from your training script)
+        ordinal_valid_categories = {
+            'Days_Policy_Accident': ['none', '1', '2 to 3', '4 to 5', '6 to 7', '8 to 10', '10+', 'more than 30', '1 to 2', '3 to 5', '1 to 7'],
+            'Days_Policy_Claim': ['none', '1', '2 to 3', '4 to 5', '6 to 7', '8 to 10', '10+', 'more than 30', '1 to 2', '3 to 5', '1 to 7'],
+            'PastNumberOfClaims': ['none', '1', '2', '3', '4', '5', 'more than 5'],
+            'AgeOfVehicle': ['< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', 'more than 7'],
+            'AgeOfPolicyHolder': ['16 to 17', '18 to 20', '21 to 25', '26 to 30', '31 to 35', '36 to 40', '41 to 50', '51 to 65', '65+'],
+            'NumberOfSuppliments': ['none', '1 to 2', '3 to 5', 'more than 5'],
+            'AddressChange_Claim': ['no change', 'under 6 months', '1 year', '2 to 3 years', '3 to 4 years', '4 to 5 years', 'more than 5 years']
+        }
+        
+        # One-hot encoded columns (all object columns not in ordinal_features)
+        onehot_features = [
             'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
             'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
             'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
-            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
-            'Days_Policy_Accident', 'Days_Policy_Claim',
-            'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
-            'AgeOfVehicle', 'AgeOfPolicyHolder'  # Added these as they seem categorical
+            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType'
         ]
         
-        # Numeric columns
-        num_cols = [
+        # Numerical columns (remainder='passthrough' in your pipeline)
+        numerical_features = [
             'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
             'DriverRating', 'Age', 'NumberOfCars'
         ]
         
-        print(f"📊 Processing data with shape: {df.shape}")
-        print(f"📊 Columns: {list(df.columns)}")
-        
-        # First, handle numeric columns and convert to proper numeric types
-        for col in num_cols:
+        # Step 1: Clean and validate numerical columns
+        print("🔧 Processing numerical columns...")
+        for col in numerical_features:
             if col in df.columns:
-                # Convert to numeric, replacing non-numeric with NaN
+                # Convert to numeric, handling any non-numeric values
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                print(f"   ✅ Numeric column {col}: {df[col].dtype}")
+                
+                # Fill NaN with reasonable defaults
+                if col == 'WeekOfMonth':
+                    df[col] = df[col].fillna(1)
+                elif col == 'WeekOfMonthClaimed':
+                    df[col] = df[col].fillna(1)
+                elif col == 'Year':
+                    df[col] = df[col].fillna(2000)
+                elif col == 'Deductible':
+                    df[col] = df[col].fillna(300)
+                elif col == 'DriverRating':
+                    df[col] = df[col].fillna(1)
+                elif col == 'Age':
+                    df[col] = df[col].fillna(25)
+                elif col == 'NumberOfCars':
+                    df[col] = df[col].fillna(1)
+                
+                print(f"   ✅ {col}: {df[col].iloc[0]} (type: {df[col].dtype})")
         
-        # Fill NaNs in numeric columns with appropriate defaults
-        numeric_defaults = {
-            'WeekOfMonth': 1,
-            'WeekOfMonthClaimed': 1, 
-            'Year': 2000,
-            'Deductible': 0,
-            'DriverRating': 1,
-            'Age': 25,
-            'NumberOfCars': 1
-        }
-        
-        for col, default_val in numeric_defaults.items():
+        # Step 2: Clean and validate ordinal columns
+        print("🔧 Processing ordinal columns...")
+        for col in ordinal_features:
             if col in df.columns:
-                df[col].fillna(default_val, inplace=True)
+                # Convert to string and clean
+                df[col] = df[col].astype(str).str.strip()
+                
+                # Replace problematic values
+                problematic_values = ['nan', 'NaN', 'None', 'null', 'NULL', '', ' ']
+                df[col] = df[col].replace(problematic_values, 'none')
+                
+                # Validate against known categories
+                valid_cats = ordinal_valid_categories[col]
+                if df[col].iloc[0] not in valid_cats:
+                    print(f"   ⚠️ Unknown value '{df[col].iloc[0]}' in {col}, using 'none'")
+                    df[col] = df[col].replace(df[col].iloc[0], 'none')
+                
+                print(f"   ✅ {col}: '{df[col].iloc[0]}' (valid: {df[col].iloc[0] in valid_cats})")
         
-        # Handle categorical columns - convert everything to string and handle nulls
-        for col in cat_cols:
+        # Step 3: Clean and validate one-hot encoded columns  
+        print("🔧 Processing one-hot encoded columns...")
+        for col in onehot_features:
             if col in df.columns:
-                # First convert to string, handling any None/NaN values
-                df[col] = df[col].astype(str)
-                # Replace 'nan', 'None', empty strings with 'missing'
-                df[col] = df[col].replace(['nan', 'None', '', 'null', 'NaN'], 'missing')
-                print(f"   ✅ Categorical column {col}: unique values = {df[col].nunique()}")
-        
-        # Final safety check - ensure no remaining NaN values
-        if df.isnull().any().any():
-            print("⚠️ Warning: Found remaining NaN values, filling with defaults...")
-            # Fill remaining NaNs based on column type
-            for col in df.columns:
-                if col in num_cols:
-                    df[col].fillna(0, inplace=True)
+                # Convert to string and clean
+                df[col] = df[col].astype(str).str.strip()
+                
+                # Replace problematic values with reasonable defaults
+                problematic_values = ['nan', 'NaN', 'None', 'null', 'NULL', '', ' ']
+                
+                if col in ['Month', 'MonthClaimed']:
+                    df[col] = df[col].replace(problematic_values, 'Jan')
+                elif col in ['DayOfWeek', 'DayOfWeekClaimed']:
+                    df[col] = df[col].replace(problematic_values, 'Monday')
+                elif col == 'Make':
+                    df[col] = df[col].replace(problematic_values, 'Honda')
+                elif col == 'VehicleCategory':
+                    df[col] = df[col].replace(problematic_values, 'Sedan')
+                elif col == 'VehiclePrice':
+                    df[col] = df[col].replace(problematic_values, '20000 to 29000')
+                elif col in ['PolicyType', 'BasePolicy']:
+                    df[col] = df[col].replace(problematic_values, 'Collision')
+                elif col == 'Sex':
+                    df[col] = df[col].replace(problematic_values, 'Male')
+                elif col == 'MaritalStatus':
+                    df[col] = df[col].replace(problematic_values, 'Single')
+                elif col == 'AccidentArea':
+                    df[col] = df[col].replace(problematic_values, 'Urban')
+                elif col == 'Fault':
+                    df[col] = df[col].replace(problematic_values, 'Policy Holder')
+                elif col in ['PoliceReportFiled', 'WitnessPresent']:
+                    df[col] = df[col].replace(problematic_values, 'No')
+                elif col == 'AgentType':
+                    df[col] = df[col].replace(problematic_values, 'Internal')
                 else:
-                    df[col].fillna('missing', inplace=True)
+                    df[col] = df[col].replace(problematic_values, 'Unknown')
+                
+                print(f"   ✅ {col}: '{df[col].iloc[0]}'")
+        
+        # Step 4: Final validation - ensure no null values remain
+        print("🔍 Final validation...")
+        null_cols = df.columns[df.isnull().any()].tolist()
+        if null_cols:
+            print(f"   ⚠️ Found remaining nulls in: {null_cols}")
+            for col in null_cols:
+                if col in numerical_features:
+                    df[col] = df[col].fillna(0)
+                else:
+                    df[col] = df[col].fillna('Unknown')
+            print("   ✅ Nulls filled with defaults")
+        
+        # Step 5: Ensure column order matches training data
+        # The order should be: ordinal_features + onehot_features + numerical_features
+        expected_columns = ordinal_features + onehot_features + numerical_features
+        
+        # Reorder columns to match expected order
+        missing_cols = [col for col in expected_columns if col not in df.columns]
+        if missing_cols:
+            print(f"   ⚠️ Missing columns: {missing_cols}")
+            # Add missing columns with default values
+            for col in missing_cols:
+                if col in numerical_features:
+                    df[col] = 0
+                elif col in ordinal_features:
+                    df[col] = 'none'
+                else:
+                    df[col] = 'Unknown'
+        
+        # Reorder columns
+        df = df[expected_columns]
         
         print(f"✅ Data preprocessing complete. Final shape: {df.shape}")
-        print(f"✅ Data types: {df.dtypes.to_dict()}")
+        print(f"✅ Column order: {list(df.columns)}")
         
-        # Transform using the pipeline
+        # Step 6: Apply the pipeline transformation
+        print("🔄 Applying pipeline transformation...")
         X_processed = pipeline.transform(df)
         
-        # Convert sparse matrix to dense if needed
-        if hasattr(X_processed, "toarray"):
-            X_processed = X_processed.toarray()
-            
+        # The output should already be in the right format from your pipeline
+        # No need to convert sparse to dense as your pipeline handles this
+        
         print(f"✅ Pipeline transformation complete. Output shape: {X_processed.shape}")
         return X_processed.astype(np.float32)
 
     except Exception as e:
-        print(f"❌ Error in preprocessing: {e}")
-        print(f"❌ Error type: {type(e)}")
+        print(f"❌ Preprocessing failed: {e}")
+        print(f"❌ Error type: {type(e).__name__}")
+        
+        # Enhanced debugging
+        if "isnan" in str(e):
+            print("\n🚨 OneHotEncoder/OrdinalEncoder Issue:")
+            print("Checking data types in problematic columns...")
+            try:
+                for col in df.columns:
+                    unique_vals = df[col].unique()
+                    print(f"   {col} ({df[col].dtype}): {unique_vals}")
+            except:
+                pass
+        
         import traceback
-        print(f"❌ Traceback: {traceback.format_exc()}")
+        print(f"\n❌ Full traceback:\n{traceback.format_exc()}")
         return None
 
 
-def debug_pipeline_categories(pipeline):
+def create_validated_inference_data(claim_data):
     """
-    Debug function to inspect the categories in the loaded pipeline
+    Create inference data that exactly matches your training pipeline expectations
     """
-    try:
-        # Access the ColumnTransformer
-        if hasattr(pipeline, 'named_steps') and 'preprocessor' in pipeline.named_steps:
-            preprocessor = pipeline.named_steps['preprocessor']
-        elif hasattr(pipeline, 'transformers_'):
-            preprocessor = pipeline
+    
+    # Define the exact valid values for each ordinal feature
+    ordinal_defaults = {
+        'Days_Policy_Accident': 'more than 30',
+        'Days_Policy_Claim': 'more than 30', 
+        'PastNumberOfClaims': 'none',
+        'AgeOfVehicle': '3 years',
+        'AgeOfPolicyHolder': '21 to 25',
+        'NumberOfSuppliments': 'none',
+        'AddressChange_Claim': 'no change'
+    }
+    
+    # Valid categories for ordinal features
+    valid_ordinal_values = {
+        'Days_Policy_Accident': ['none', '1', '2 to 3', '4 to 5', '6 to 7', '8 to 10', '10+', 'more than 30', '1 to 2', '3 to 5', '1 to 7'],
+        'Days_Policy_Claim': ['none', '1', '2 to 3', '4 to 5', '6 to 7', '8 to 10', '10+', 'more than 30', '1 to 2', '3 to 5', '1 to 7'],
+        'PastNumberOfClaims': ['none', '1', '2', '3', '4', '5', 'more than 5'],
+        'AgeOfVehicle': ['< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', 'more than 7'],
+        'AgeOfPolicyHolder': ['16 to 17', '18 to 20', '21 to 25', '26 to 30', '31 to 35', '36 to 40', '41 to 50', '51 to 65', '65+'],
+        'NumberOfSuppliments': ['none', '1 to 2', '3 to 5', 'more than 5'],
+        'AddressChange_Claim': ['no change', 'under 6 months', '1 year', '2 to 3 years', '3 to 4 years', '4 to 5 years', 'more than 5 years']
+    }
+    
+    def safe_ordinal_get(key, default_key):
+        """Get ordinal value with validation"""
+        value = str(claim_data.get(key, ordinal_defaults[default_key]))
+        if value in valid_ordinal_values[default_key]:
+            return value
         else:
-            print("Cannot find preprocessor in pipeline")
-            return
-            
-        # Find the OneHotEncoder
-        for name, transformer, columns in preprocessor.transformers_:
-            if hasattr(transformer, 'categories_'):
-                print(f"\n🔍 Transformer: {name}")
-                print(f"   Columns: {columns}")
-                for i, categories in enumerate(transformer.categories_):
-                    print(f"   Column {i} categories: {categories[:5]}...")  # Show first 5
-                    
-    except Exception as e:
-        print(f"Error debugging pipeline: {e}")
-
-
-def create_emergency_preprocessing_pipeline():
-    """
-    Create a new preprocessing pipeline as emergency fallback
-    This should match your original training pipeline structure
-    """
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import StandardScaler, OneHotEncoder
-    from sklearn.pipeline import Pipeline
+            print(f"⚠️ Invalid {key} value '{value}', using '{ordinal_defaults[default_key]}'")
+            return ordinal_defaults[default_key]
     
-    # Define column types (adjust based on your training data)
-    categorical_columns = [
-        'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
-        'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
-        'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
-        'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
-        'Days_Policy_Accident', 'Days_Policy_Claim',
-        'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
-        'AgeOfVehicle', 'AgeOfPolicyHolder'
-    ]
+    def safe_get(key, default):
+        """Safely get value"""
+        value = claim_data.get(key, default)
+        return str(value) if value is not None else str(default)
     
-    numerical_columns = [
-        'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
-        'DriverRating', 'Age', 'NumberOfCars'
-    ]
+    # Create inference data in the exact order expected by your pipeline
+    inference_data = {
+        # Ordinal features (processed first in your pipeline)
+        'Days_Policy_Accident': safe_ordinal_get('days_policy_accident', 'Days_Policy_Accident'),
+        'Days_Policy_Claim': safe_ordinal_get('days_policy_claim', 'Days_Policy_Claim'),
+        'PastNumberOfClaims': safe_ordinal_get('past_number_of_claims', 'PastNumberOfClaims'),
+        'AgeOfVehicle': safe_ordinal_get('age_of_vehicle', 'AgeOfVehicle'),
+        'AgeOfPolicyHolder': safe_ordinal_get('age_of_policy_holder', 'AgeOfPolicyHolder'),
+        'NumberOfSuppliments': safe_ordinal_get('number_of_suppliments', 'NumberOfSuppliments'),
+        'AddressChange_Claim': safe_ordinal_get('address_change_claim', 'AddressChange_Claim'),
+        
+        # One-hot encoded features
+        'Month': safe_get('month', 'Jan'),
+        'DayOfWeek': safe_get('day_of_week', 'Monday'),
+        'MonthClaimed': safe_get('month_claimed', 'Jan'),
+        'DayOfWeekClaimed': safe_get('day_of_week_claimed', 'Monday'),
+        'Make': safe_get('make', 'Honda'),
+        'VehicleCategory': safe_get('vehicle_category', 'Sedan'),
+        'VehiclePrice': safe_get('vehicle_price', '20000 to 29000'),
+        'PolicyType': safe_get('policy_type', 'sport - Collison'),
+        'BasePolicy': safe_get('base_policy', 'Collision'),
+        'Sex': safe_get('sex', 'Male'),
+        'MaritalStatus': safe_get('marital_status', 'Single'),
+        'AccidentArea': safe_get('accident_area', 'Urban'),
+        'Fault': safe_get('fault', 'Policy Holder'),
+        'PoliceReportFiled': safe_get('police_report_filed', 'Yes'),
+        'WitnessPresent': safe_get('witness_present', 'Yes'),
+        'AgentType': safe_get('agent_type', 'Internal'),
+        
+        # Numerical features (remainder='passthrough')
+        'WeekOfMonth': int(claim_data.get('week_of_month', 4)),
+        'WeekOfMonthClaimed': int(claim_data.get('week_of_month_claimed', 5)),
+        'Year': int(claim_data.get('year', 1994)),
+        'Deductible': int(claim_data.get('deductible', 300)),
+        'DriverRating': int(claim_data.get('driver_rating', 1)),
+        'Age': int(claim_data.get('age', 21)),
+        'NumberOfCars': int(claim_data.get('number_of_cars', 1))
+    }
     
-    # Create preprocessors
-    numerical_transformer = StandardScaler()
-    categorical_transformer = OneHotEncoder(
-        drop='first',
-        sparse_output=False,
-        handle_unknown='ignore'  # This is crucial for inference
-    )
-    
-    # Combine preprocessors
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numerical_transformer, numerical_columns),
-            ('cat', categorical_transformer, categorical_columns)
-        ]
-    )
-    
-    return preprocessor
-
-
-def emergency_preprocess_data(df_raw):
-    """
-    Emergency preprocessing without using the saved pipeline
-    """
-    try:
-        df = df_raw.copy()
-        
-        # Create and fit emergency pipeline on the inference data itself
-        emergency_pipeline = create_emergency_preprocessing_pipeline()
-        
-        # Clean the data first
-        categorical_columns = [
-            'Month', 'DayOfWeek', 'MonthClaimed', 'DayOfWeekClaimed',
-            'Make', 'VehicleCategory', 'VehiclePrice', 'PolicyType',
-            'BasePolicy', 'Sex', 'MaritalStatus', 'AccidentArea',
-            'Fault', 'PoliceReportFiled', 'WitnessPresent', 'AgentType',
-            'Days_Policy_Accident', 'Days_Policy_Claim',
-            'PastNumberOfClaims', 'NumberOfSuppliments', 'AddressChange_Claim',
-            'AgeOfVehicle', 'AgeOfPolicyHolder'
-        ]
-        
-        numerical_columns = [
-            'WeekOfMonth', 'WeekOfMonthClaimed', 'Year', 'Deductible',
-            'DriverRating', 'Age', 'NumberOfCars'
-        ]
-        
-        # Clean numerical columns
-        for col in numerical_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        # Clean categorical columns
-        for col in categorical_columns:
-            if col in df.columns:
-                df[col] = df[col].astype(str).replace(['nan', 'None', ''], 'Unknown')
-        
-        # Fit and transform (only for emergency use)
-        # Note: This won't give you the same feature space as your trained model
-        X_processed = emergency_pipeline.fit_transform(df)
-        
-        print(f"⚠️ Emergency preprocessing completed. Shape: {X_processed.shape}")
-        print("⚠️ WARNING: This may not match your trained model's feature space!")
-        
-        return X_processed.astype(np.float32)
-        
-    except Exception as e:
-        print(f"❌ Emergency preprocessing also failed: {e}")
-        return None
-
-
-def safe_preprocess_with_fallback(df_raw, pipeline):
-    """
-    Try normal preprocessing first, fall back to emergency preprocessing
-    """
-    # Try the robust preprocessing first
-    result = safe_preprocess_inference_data(df_raw, pipeline)
-    
-    if result is None:
-        print("\n🚨 Normal preprocessing failed, trying emergency fallback...")
-        result = emergency_preprocess_data(df_raw)
-        
-    return result
+    return inference_data
 # -------------------------------
 # 7. Tabular Data Preprocessing using saved sklearn pipeline
 # -------------------------------
