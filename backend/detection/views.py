@@ -25,6 +25,8 @@ from django.contrib.auth.models import User
 from .serializers import RegisterSerializer, PolicyholderSerializer
 from .models import Policyholder
 
+from .verification_apis import verify_dl, verify_rto, verify_fir, aggregate_verification
+
 # Import ML libraries
 try:
     import joblib
@@ -668,16 +670,20 @@ def get_detailed_image_predictions(image_path, image_model, device):
         }
 
 
-def calculate_detailed_fusion(tabular_details, image_details):
-    """Calculate fusion with detailed mathematical breakdown"""
+def calculate_detailed_fusion(tabular_details, image_details,
+                              dl_number=None, expiry_date=None,
+                              reg_no=None, make=None, year=None,
+                              fir_no=None):
+    """Calculate fusion with detailed mathematical breakdown + verification layer"""
     try:
+        # === BASE MODEL PROBABILITIES ===
         tabular_fraud_prob = tabular_details.get('ensemble_probabilities', {}).get('fraud', 0.4)
         tabular_confidence = tabular_details.get('tabular_confidence', 0.6)
         
         image_fraud_prob = image_details.get('image_fraud_probability', 0.3)
         image_confidence = image_details.get('image_confidence', 0.6)
         
-        # Calculate weights
+        # === CALCULATE WEIGHTS ===
         total_confidence = tabular_confidence + image_confidence
         if total_confidence > 0:
             tabular_weight = tabular_confidence / total_confidence
@@ -686,7 +692,7 @@ def calculate_detailed_fusion(tabular_details, image_details):
             tabular_weight = 0.5
             image_weight = 0.5
         
-        # Fusion methods
+        # === FUSION METHODS ===
         weighted_fusion = (tabular_weight * tabular_fraud_prob) + (image_weight * image_fraud_prob)
         geometric_fusion = np.sqrt(max(tabular_fraud_prob * image_fraud_prob, 0))
         max_fusion = max(tabular_fraud_prob, image_fraud_prob)
@@ -696,21 +702,38 @@ def calculate_detailed_fusion(tabular_details, image_details):
         else:
             harmonic_fusion = 0.0
         
-        # Final fusion
+        # === BASE FINAL FUSION ===
         alpha = 0.6
         beta = 0.4
-        final_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
+        base_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
         
-        # Decision
+        # ===================================================================
+        # 🔐 VERIFICATION INTEGRATION (DL / RTO / FIR)
+        # ===================================================================
+        dl_info = verify_dl(dl_number, expiry_date)
+        rto_info = verify_rto(reg_no, make, year)
+        fir_info = verify_fir(fir_no)
+
+        verification_reliability = aggregate_verification(dl_info, rto_info, fir_info)
+        # lower reliability → higher fraud likelihood
+        verification_impact = (1 - verification_reliability)
+
+        # Weighted merge with verification reliability
+        gamma = 0.25  # how much verification affects fusion
+        final_fusion_score = ((1 - gamma) * base_fusion_score) + (gamma * verification_impact)
+
+        # === DECISION ===
         fraud_threshold = 0.5
         final_prediction = 1 if final_fusion_score > fraud_threshold else 0
         
+        # === RETURN STRUCTURE ===
         return {
             'input_probabilities': {
                 'tabular_fraud_probability': float(tabular_fraud_prob),
                 'tabular_confidence': float(tabular_confidence),
                 'image_fraud_probability': float(image_fraud_prob),
-                'image_confidence': float(image_confidence)
+                'image_confidence': float(image_confidence),
+                'verification_reliability': float(verification_reliability)
             },
             'weight_calculation': {
                 'total_confidence': float(total_confidence),
@@ -736,10 +759,18 @@ def calculate_detailed_fusion(tabular_details, image_details):
                     'formula': f"2 × {tabular_fraud_prob:.3f} × {image_fraud_prob:.3f} / ({tabular_fraud_prob:.3f} + {image_fraud_prob:.3f})"
                 }
             },
+            'verification_details': {
+                'dl': dl_info,
+                'rto': rto_info,
+                'fir': fir_info,
+                'combined_reliability': float(verification_reliability)
+            },
             'final_fusion': {
                 'alpha': float(alpha),
                 'beta': float(beta),
-                'calculation': f"({alpha} × {weighted_fusion:.3f}) + ({beta} × {geometric_fusion:.3f})",
+                'gamma': float(gamma),
+                'calculation': f"(({1 - gamma} × base_fusion) + ({gamma} × (1−reliability)))",
+                'base_fusion': float(base_fusion_score),
                 'final_score': float(final_fusion_score),
                 'threshold': float(fraud_threshold),
                 'prediction': int(final_prediction)
@@ -768,9 +799,16 @@ def calculate_detailed_fusion(tabular_details, image_details):
                 'maximum': {'score': 0.4},
                 'harmonic_mean': {'score': 0.343}
             },
+            'verification_details': {
+                'dl': {'valid': False, 'dl_score': 0.4},
+                'rto': {'valid': False, 'rto_score': 0.4},
+                'fir': {'exists': False, 'fir_score': 0.3},
+                'combined_reliability': 0.37
+            },
             'final_fusion': {
                 'alpha': 0.6,
                 'beta': 0.4,
+                'gamma': 0.25,
                 'final_score': 0.348,
                 'threshold': 0.5,
                 'prediction': 0

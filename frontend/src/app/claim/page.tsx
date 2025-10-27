@@ -14,6 +14,10 @@ export default function ClaimPage() {
     claim_description: "",
     accident_date: "",
     claim_amount: "",
+    dl_number: "",
+    vehicle_reg_no: "",
+    fir_number: "",
+
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>("");
@@ -138,6 +142,10 @@ export default function ClaimPage() {
       data.append("accident_date", formData.accident_date);
       data.append("claim_amount", formData.claim_amount);
       data.append("car_image", imageFile!);
+      data.append("dl_number", formData.dl_number.trim());
+      data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
+      data.append("fir_number", formData.fir_number.trim());
+
 
       const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
         method: "POST",
@@ -680,20 +688,78 @@ export default function ClaimPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_description">
-                  Claim Description <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  id="claim_description"
-                  name="claim_description"
-                  value={formData.claim_description}
-                  onChange={handleChange}
-                  required
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  rows={4}
-                  placeholder="Describe the accident, damage, and circumstances in detail..."
-                />
-              </div>
+  <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_description">
+    Claim Description <span className="text-red-500">*</span>
+  </label>
+  <textarea
+    id="claim_description"
+    name="claim_description"
+    value={formData.claim_description}
+    onChange={handleChange}
+    required
+    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+    rows={4}
+    placeholder="Describe the accident, damage, and circumstances in detail..."
+  />
+</div>
+
+{/* --- NEW FIELDS START HERE --- */}
+<div className="grid md:grid-cols-3 gap-6">
+  {/* DL Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="dl_number">
+      Driving License Number <span className="text-red-500">*</span>
+    </label>
+    <input
+      id="dl_number"
+      name="dl_number"
+      type="text"
+      value={formData.dl_number || ""}
+      onChange={handleChange}
+      placeholder="e.g. MH14 20201234567"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      required
+    />
+    <p className="text-sm text-gray-500 mt-1">Format: State code + Year + Serial (e.g. MH14 20201234567)</p>
+  </div>
+
+  {/* Vehicle Registration Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="vehicle_reg_no">
+      Vehicle Registration No. <span className="text-red-500">*</span>
+    </label>
+    <input
+      id="vehicle_reg_no"
+      name="vehicle_reg_no"
+      type="text"
+      value={formData.vehicle_reg_no || ""}
+      onChange={handleChange}
+      placeholder="e.g. MH12AB1234"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      required
+    />
+    <p className="text-sm text-gray-500 mt-1">Enter the vehicle’s official RTO number</p>
+  </div>
+
+  {/* FIR Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="fir_number">
+      FIR / Police Report No.
+    </label>
+    <input
+      id="fir_number"
+      name="fir_number"
+      type="text"
+      value={formData.fir_number || ""}
+      onChange={handleChange}
+      placeholder="e.g. FIR2025-123456"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+    />
+    <p className="text-sm text-gray-500 mt-1">Optional — if an FIR was registered for the accident</p>
+  </div>
+</div>
+{/* --- NEW FIELDS END HERE --- */}
+
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_amount">
