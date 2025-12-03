@@ -27,13 +27,6 @@ from .models import Policyholder
 
 from .verification_apis import verify_dl, verify_rto, verify_fir, aggregate_verification
 
-from .verification_apis import (
-    verify_police_report,
-    verify_vehicle_registration,
-    verify_driving_license
-)
-from decouple import config
-
 # Import ML libraries
 try:
     import joblib
@@ -746,13 +739,15 @@ def get_detailed_image_predictions(image_path, image_model, device):
         }
 
 
-def process_multiple_images(image_paths, image_model, device):
-    """Process multiple images and aggregate results"""
-    all_image_details = []
-    all_damage_info = []
-    
-    for idx, image_path in enumerate(image_paths):
-        print(f"📸 Processing image {idx + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
+def calculate_detailed_fusion(tabular_details, image_details,
+                              dl_number=None, expiry_date=None,
+                              reg_no=None, make=None, year=None,
+                              fir_no=None):
+    """Calculate fusion with detailed mathematical breakdown + verification layer"""
+    try:
+        # === BASE MODEL PROBABILITIES ===
+        tabular_fraud_prob = tabular_details.get('ensemble_probabilities', {}).get('fraud', 0.4)
+        tabular_confidence = tabular_details.get('tabular_confidence', 0.6)
         
         # Get predictions for this image
         image_details = get_detailed_image_predictions(image_path, image_model, device)
@@ -760,175 +755,15 @@ def process_multiple_images(image_paths, image_model, device):
         image_details['image_filename'] = os.path.basename(image_path)
         all_image_details.append(image_details)
         
-        # Get damage detection visualization
-        if image_model is not None:
-            damage_info = process_damage_detection_image(image_path, image_model, device)
-            if damage_info:
-                damage_info['image_index'] = idx + 1
-                damage_info['image_filename'] = os.path.basename(image_path)
-                all_damage_info.append(damage_info)
-    
-    # Aggregate results across all images
-    aggregated_results = aggregate_multi_image_results(all_image_details)
-    
-    return {
-        'individual_image_results': all_image_details,
-        'individual_damage_detections': all_damage_info,
-        'aggregated_results': aggregated_results,
-        'total_images_processed': len(image_paths)
-    }
-
-
-def aggregate_multi_image_results(all_image_details):
-    """Aggregate predictions from multiple images into a single confidence score"""
-    if not all_image_details:
-        return {
-            'aggregation_method': 'none',
-            'final_image_fraud_probability': 0.3,
-            'final_image_confidence': 0.5
-        }
-    
-    # Extract key metrics from each image
-    fraud_probs = [img['image_fraud_probability'] for img in all_image_details]
-    confidences = [img['image_confidence'] for img in all_image_details]
-    damage_percentages = [img['damage_analysis']['damage_percentage'] for img in all_image_details]
-    severity_scores = [img['damage_analysis']['severity_score'] for img in all_image_details]
-    
-    # Method 1: Weighted average (higher confidence = higher weight)
-    total_confidence = sum(confidences)
-    if total_confidence > 0:
-        weighted_fraud_prob = sum(fp * conf for fp, conf in zip(fraud_probs, confidences)) / total_confidence
-    else:
-        weighted_fraud_prob = np.mean(fraud_probs)
-    
-    # Method 2: Maximum fraud probability (most suspicious image)
-    max_fraud_prob = max(fraud_probs)
-    max_fraud_idx = fraud_probs.index(max_fraud_prob)
-    
-    # Method 3: Average of top 2 most suspicious images
-    sorted_probs = sorted(fraud_probs, reverse=True)
-    top_k = min(2, len(sorted_probs))
-    top_k_avg = np.mean(sorted_probs[:top_k])
-    
-    # Method 4: Damage-weighted average
-    total_damage = sum(damage_percentages)
-    if total_damage > 0:
-        damage_weighted_prob = sum(
-            fp * dp for fp, dp in zip(fraud_probs, damage_percentages)
-        ) / total_damage
-    else:
-        damage_weighted_prob = np.mean(fraud_probs)
-    
-    # Final aggregation: Combine methods with tuned weights
-    # Prioritize the most suspicious images while considering overall pattern
-    final_fraud_probability = (
-        0.35 * max_fraud_prob +           # Highest single image
-        0.25 * weighted_fraud_prob +       # Confidence-weighted average
-        0.25 * top_k_avg +                 # Average of top suspicious images
-        0.15 * damage_weighted_prob        # Damage-based weighting
-    )
-    
-    # Calculate final confidence based on consistency across images
-    fraud_prob_std = np.std(fraud_probs)
-    confidence_consistency = 1.0 - min(fraud_prob_std / 0.5, 1.0)  # Lower std = higher consistency
-    final_confidence = (np.mean(confidences) + confidence_consistency) / 2
-    
-    # Determine overall severity
-    avg_damage_percentage = np.mean(damage_percentages)
-    max_damage_percentage = max(damage_percentages)
-    
-    if max_damage_percentage > 15 or avg_damage_percentage > 10:
-        overall_severity = "HIGH"
-    elif max_damage_percentage > 5 or avg_damage_percentage > 3:
-        overall_severity = "MEDIUM"
-    else:
-        overall_severity = "LOW"
-    
-    return {
-        'aggregation_method': 'multi_method_ensemble',
-        'total_images': len(all_image_details),
-        
-        'fraud_probability_distribution': {
-            'min': float(min(fraud_probs)),
-            'max': float(max(fraud_probs)),
-            'mean': float(np.mean(fraud_probs)),
-            'median': float(np.median(fraud_probs)),
-            'std': float(fraud_prob_std)
-        },
-        
-        'aggregation_components': {
-            'max_fraud_probability': float(max_fraud_prob),
-            'max_fraud_image_index': max_fraud_idx + 1,
-            'weighted_average': float(weighted_fraud_prob),
-            'top_k_average': float(top_k_avg),
-            'damage_weighted': float(damage_weighted_prob)
-        },
-        
-        'damage_summary': {
-            'avg_damage_percentage': float(avg_damage_percentage),
-            'max_damage_percentage': float(max_damage_percentage),
-            'min_damage_percentage': float(min(damage_percentages)),
-            'total_detections_all_images': sum(img['detection_results']['high_confidence_detections'] for img in all_image_details)
-        },
-        
-        'severity_analysis': {
-            'overall_severity': overall_severity,
-            'avg_severity_score': float(np.mean(severity_scores)),
-            'max_severity_score': float(max(severity_scores)),
-            'severity_levels': [img['damage_analysis']['severity_level'] for img in all_image_details]
-        },
-        
-        'confidence_metrics': {
-            'avg_confidence': float(np.mean(confidences)),
-            'confidence_consistency': float(confidence_consistency),
-            'final_confidence': float(final_confidence)
-        },
-        
-        # Final outputs for fusion
-        'final_image_fraud_probability': float(final_fraud_probability),
-        'final_image_confidence': float(final_confidence),
-        
-        'recommendation': {
-            'consistency': 'HIGH' if fraud_prob_std < 0.1 else 'MEDIUM' if fraud_prob_std < 0.2 else 'LOW',
-            'most_suspicious_image': max_fraud_idx + 1,
-            'images_requiring_attention': [i + 1 for i, fp in enumerate(fraud_probs) if fp > 0.6]
-        }
-    }
-
-
-import numpy as np
-
-def calculate_detailed_fusion(
-    tabular_details,
-    image_details,
-    claim_amount=0,  # 🆕 NEW: Pass claim amount
-    dl_number=None,
-    expiry_date=None,
-    reg_no=None,
-    make=None,
-    year=None,
-    fir_no=None
-):
-    """
-    Fusion model combining tabular + image + amount-damage analysis
-    ⚠️ Verification is checked but NOT weighted into fraud score
-    """
-
-    try:
-        # === BASE MODEL PROBABILITIES ===
-        tabular_fraud_prob = tabular_details.get("probabilities", {}).get("fraud", 0.4)
-        tabular_confidence = tabular_details.get("primary_prediction", {}).get("confidence", 0.6)
-        
-        image_fraud_prob = image_details.get("final_image_fraud_probability", 
-                                            image_details.get("image_fraud_probability", 0.3))
-        image_confidence = image_details.get("final_image_confidence", 
-                                             image_details.get("image_confidence", 0.7))
-
-        # === MODEL WEIGHTS (IMAGE DOMINANT) ===
+        # === CALCULATE WEIGHTS ===
         total_confidence = tabular_confidence + image_confidence
-        tabular_weight = tabular_confidence / total_confidence if total_confidence > 0 else 0.4
-        image_weight = image_confidence / total_confidence if total_confidence > 0 else 0.6
-
+        if total_confidence > 0:
+            tabular_weight = tabular_confidence / total_confidence
+            image_weight = image_confidence / total_confidence
+        else:
+            tabular_weight = 0.5
+            image_weight = 0.5
+        
         # === FUSION METHODS ===
         weighted_fusion = (tabular_weight * tabular_fraud_prob) + (image_weight * image_fraud_prob)
         geometric_fusion = np.sqrt(max(tabular_fraud_prob * image_fraud_prob, 0))
@@ -976,45 +811,38 @@ def calculate_detailed_fusion(
                 'severity': 'MEDIUM'
             }
         
-        # Conversely: Low claim with high damage = LIKELY LEGITIMATE (reduce score slightly)
-        if claim_amount < 30000 and damage_percentage > 20:
-            amount_damage_boost = -0.10  # Reduce fraud score
-            mismatch_details = {
-                'type': 'REASONABLE_CLAIM',
-                'reason': f'Low claim (₹{claim_amount:,.0f}) matches high damage ({damage_percentage:.1f}%)',
-                'boost': -0.10,
-                'severity': 'INFO'
-            }
-
-        # =====================================================================
-        # 🔐 VERIFICATION PHASE (FOR INFORMATION ONLY - NOT SCORED)
-        # =====================================================================
+        # === BASE FINAL FUSION ===
+        alpha = 0.6
+        beta = 0.4
+        base_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
+        
+        # ===================================================================
+        # 🔐 VERIFICATION INTEGRATION (DL / RTO / FIR)
+        # ===================================================================
         dl_info = verify_dl(dl_number, expiry_date)
         rto_info = verify_rto(reg_no, make, year)
         fir_info = verify_fir(fir_no)
 
-        # Aggregate verification reliability (0 → unreliable, 1 → verified)
         verification_reliability = aggregate_verification(dl_info, rto_info, fir_info)
+        # lower reliability → higher fraud likelihood
+        verification_impact = (1 - verification_reliability)
 
-        # 🚨 IMPORTANT: Verification does NOT affect fraud score anymore
-        # It's purely informational for the investigator
-        
-        # Final fusion considering ONLY tabular + image + amount-damage mismatch
-        final_fusion_score = base_fusion_score + amount_damage_boost
-        final_fusion_score = max(0.0, min(final_fusion_score, 0.99))  # Clamp to [0, 0.99]
+        # Weighted merge with verification reliability
+        gamma = 0.25  # how much verification affects fusion
+        final_fusion_score = ((1 - gamma) * base_fusion_score) + (gamma * verification_impact)
 
         # === DECISION ===
         fraud_threshold = 0.5
         final_prediction = 1 if final_fusion_score > fraud_threshold else 0
-
-        # === FINAL STRUCTURE ===
+        
+        # === RETURN STRUCTURE ===
         return {
-            "input_probabilities": {
-                "tabular_fraud_probability": float(tabular_fraud_prob),
-                "tabular_confidence": float(tabular_confidence),
-                "image_fraud_probability": float(image_fraud_prob),
-                "image_confidence": float(image_confidence),
-                "verification_reliability": float(verification_reliability)  # Info only
+            'input_probabilities': {
+                'tabular_fraud_probability': float(tabular_fraud_prob),
+                'tabular_confidence': float(tabular_confidence),
+                'image_fraud_probability': float(image_fraud_prob),
+                'image_confidence': float(image_confidence),
+                'verification_reliability': float(verification_reliability)
             },
             "weight_calculation": {
                 "total_confidence": float(total_confidence),
@@ -1032,24 +860,21 @@ def calculate_detailed_fusion(
                     "formula": f"√({tabular_fraud_prob:.3f} × {image_fraud_prob:.3f})"
                 }
             },
-            
-            # 🆕 Amount-Damage Analysis
-            "amount_damage_analysis": {
-                "claim_amount": float(claim_amount),
-                "damage_percentage": float(damage_percentage),
-                "severity_level": severity_level,
-                "mismatch_detected": mismatch_detected,
-                "mismatch_details": mismatch_details,
-                "boost_applied": float(amount_damage_boost)
+            'verification_details': {
+                'dl': dl_info,
+                'rto': rto_info,
+                'fir': fir_info,
+                'combined_reliability': float(verification_reliability)
             },
-            
-            # Verification is info-only now
-            "verification_details": {
-                "dl": dl_info,
-                "rto": rto_info,
-                "fir": fir_info,
-                "combined_reliability": float(verification_reliability),
-                "note": "⚠️ Verification is for information only - NOT scored into fraud detection"
+            'final_fusion': {
+                'alpha': float(alpha),
+                'beta': float(beta),
+                'gamma': float(gamma),
+                'calculation': f"(({1 - gamma} × base_fusion) + ({gamma} × (1−reliability)))",
+                'base_fusion': float(base_fusion_score),
+                'final_score': float(final_fusion_score),
+                'threshold': float(fraud_threshold),
+                'prediction': int(final_prediction)
             },
             
             "final_fusion": {
@@ -1090,24 +915,19 @@ def calculate_detailed_fusion(
                 "weighted_average": {"score": 0.35},
                 "geometric_mean": {"score": 0.32}
             },
-            "amount_damage_analysis": {
-                "claim_amount": 0,
-                "damage_percentage": 0,
-                "mismatch_detected": False,
-                "boost_applied": 0.0
+            'verification_details': {
+                'dl': {'valid': False, 'dl_score': 0.4},
+                'rto': {'valid': False, 'rto_score': 0.4},
+                'fir': {'exists': False, 'fir_score': 0.3},
+                'combined_reliability': 0.37
             },
-            "verification_details": {
-                "dl": {"valid": False},
-                "rto": {"valid": False},
-                "fir": {"exists": False},
-                "note": "Verification info only"
-            },
-            "final_fusion": {
-                "base_fusion": 0.35,
-                "amount_damage_boost": 0.0,
-                "final_score": 0.35,
-                "threshold": 0.5,
-                "prediction": 0
+            'final_fusion': {
+                'alpha': 0.6,
+                'beta': 0.4,
+                'gamma': 0.25,
+                'final_score': 0.348,
+                'threshold': 0.5,
+                'prediction': 0
             },
             "final_prediction": 0,
             "final_confidence": 0.35

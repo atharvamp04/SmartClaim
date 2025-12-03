@@ -76,6 +76,7 @@ export default function ClaimPage() {
     dl_number: "",
     vehicle_reg_no: "",
     fir_number: "",
+
   });
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
@@ -233,10 +234,11 @@ const removeImage = (indexToRemove: number) => {
       data.append("claim_description", formData.claim_description.trim());
       data.append("accident_date", formData.accident_date);
       data.append("claim_amount", formData.claim_amount);
-      imageFiles.forEach((file) => {data.append("car_images", file);});
+      data.append("car_image", imageFile!);
       data.append("dl_number", formData.dl_number.trim());
       data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
       data.append("fir_number", formData.fir_number.trim());
+
 
       const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
         method: "POST",
