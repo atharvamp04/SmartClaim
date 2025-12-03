@@ -365,3 +365,74 @@ def verify_vehicle_registration(registration_number, chassis_number=None, engine
 def verify_police_report(fir_number, accident_date=None, location=None):
     """Main FIR verification function"""
     return verify_police_report_real(fir_number, accident_date, location)
+
+
+import random
+
+def verify_dl(dl_number=None, expiry_date=None):
+    """
+    Simulated Driving License verification.
+    In production: integrate Parivahan or MoRTH API.
+    """
+    if not dl_number:
+        return {"valid": False, "dl_score": 0.0, "message": "DL number missing"}
+
+    expired = False
+    if expiry_date:
+        try:
+            from datetime import datetime
+            exp = datetime.fromisoformat(str(expiry_date))
+            expired = exp < datetime.now()
+        except Exception:
+            pass
+
+    dl_score = 0.9 if not expired else 0.3
+    return {"valid": not expired, "dl_score": dl_score, "message": "DL verified" if not expired else "DL expired"}
+
+
+def verify_rto(reg_no=None, make=None, year=None):
+    """
+    Simulated RTO API verification.
+    Checks if reg_no format, make, and year are consistent.
+    """
+    if not reg_no:
+        return {"valid": False, "rto_score": 0.0, "message": "Registration missing"}
+
+    valid_make = make and make.lower() in ["maruti", "honda", "hyundai", "bmw", "audi", "tata", "mahindra"]
+    valid_year = year and 1990 < int(year) <= 2025
+    rto_score = 0.8 if (valid_make and valid_year) else 0.4
+
+    return {
+        "valid": valid_make and valid_year,
+        "rto_score": rto_score,
+        "message": "RTO verified" if valid_make and valid_year else "Mismatch detected"
+    }
+
+
+def verify_fir(fir_no=None):
+    """
+    Simulated FIR verification API.
+    In production: police record integration (state-wise API).
+    """
+    if not fir_no:
+        return {"exists": False, "fir_score": 0.5, "message": "No FIR number provided"}
+    fake_fraud_case = fir_no.lower().startswith("fraud")
+    fir_score = 0.9 if not fake_fraud_case else 0.2
+    return {"exists": True, "fir_score": fir_score, "message": "FIR verified"}
+
+
+def aggregate_verification(dl_info, rto_info, fir_info):
+    """
+    Combines DL, RTO, and FIR reliability using tuned weights.
+    Higher = more reliable verification.
+    """
+    DL_WEIGHT = 0.40
+    RTO_WEIGHT = 0.35
+    FIR_WEIGHT = 0.25
+
+    reliability = (
+        (DL_WEIGHT * dl_info.get("dl_score", 0)) +
+        (RTO_WEIGHT * rto_info.get("rto_score", 0)) +
+        (FIR_WEIGHT * fir_info.get("fir_score", 0))
+    )
+    return round(reliability, 3)

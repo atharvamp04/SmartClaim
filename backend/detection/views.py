@@ -25,6 +25,8 @@ from django.contrib.auth.models import User
 from .serializers import RegisterSerializer, PolicyholderSerializer
 from .models import Policyholder
 
+from .verification_apis import verify_dl, verify_rto, verify_fir, aggregate_verification
+
 from .verification_apis import (
     verify_police_report,
     verify_vehicle_registration,
@@ -894,75 +896,222 @@ def aggregate_multi_image_results(all_image_details):
     }
 
 
-def calculate_detailed_fusion(tabular_details, image_details):
-    """Calculate fusion with detailed mathematical breakdown"""
+import numpy as np
+
+def calculate_detailed_fusion(
+    tabular_details,
+    image_details,
+    claim_amount=0,  # 🆕 NEW: Pass claim amount
+    dl_number=None,
+    expiry_date=None,
+    reg_no=None,
+    make=None,
+    year=None,
+    fir_no=None
+):
+    """
+    Fusion model combining tabular + image + amount-damage analysis
+    ⚠️ Verification is checked but NOT weighted into fraud score
+    """
+
     try:
-        tabular_fraud_prob = tabular_details.get('probabilities', {}).get('fraud', 0.4)
-        tabular_confidence = tabular_details.get('primary_prediction', {}).get('confidence', 0.6)
+        # === BASE MODEL PROBABILITIES ===
+        tabular_fraud_prob = tabular_details.get("probabilities", {}).get("fraud", 0.4)
+        tabular_confidence = tabular_details.get("primary_prediction", {}).get("confidence", 0.6)
         
-        image_fraud_prob = image_details.get('image_fraud_probability', 0.3)
-        image_confidence = image_details.get('image_confidence', 0.6)
-        
+        image_fraud_prob = image_details.get("final_image_fraud_probability", 
+                                            image_details.get("image_fraud_probability", 0.3))
+        image_confidence = image_details.get("final_image_confidence", 
+                                             image_details.get("image_confidence", 0.7))
+
+        # === MODEL WEIGHTS (IMAGE DOMINANT) ===
         total_confidence = tabular_confidence + image_confidence
-        if total_confidence > 0:
-            tabular_weight = tabular_confidence / total_confidence
-            image_weight = image_confidence / total_confidence
-        else:
-            tabular_weight = 0.5
-            image_weight = 0.5
-        
+        tabular_weight = tabular_confidence / total_confidence if total_confidence > 0 else 0.4
+        image_weight = image_confidence / total_confidence if total_confidence > 0 else 0.6
+
+        # === FUSION METHODS ===
         weighted_fusion = (tabular_weight * tabular_fraud_prob) + (image_weight * image_fraud_prob)
         geometric_fusion = np.sqrt(max(tabular_fraud_prob * image_fraud_prob, 0))
-        max_fusion = max(tabular_fraud_prob, image_fraud_prob)
+        base_fusion_score = (0.65 * weighted_fusion) + (0.35 * geometric_fusion)
+
+        # =====================================================================
+        # 🆕 AMOUNT-DAMAGE MISMATCH DETECTION
+        # =====================================================================
+        damage_percentage = image_details.get("damage_analysis", {}).get("damage_percentage", 
+                           image_details.get("damage_summary", {}).get("avg_damage_percentage", 0))
+        severity_level = image_details.get("damage_analysis", {}).get("severity_level",
+                        image_details.get("severity_analysis", {}).get("overall_severity", "LOW"))
         
-        if tabular_fraud_prob + image_fraud_prob > 0:
-            harmonic_fusion = (2 * tabular_fraud_prob * image_fraud_prob) / (tabular_fraud_prob + image_fraud_prob)
-        else:
-            harmonic_fusion = 0.0
+        # Define mismatch thresholds
+        amount_damage_boost = 0.0
+        mismatch_detected = False
+        mismatch_details = {}
         
-        alpha = 0.6
-        beta = 0.4
-        final_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
+        # High claim amount with low damage = FRAUD SIGNAL
+        if claim_amount > 100000 and damage_percentage < 60:  # >1L claim, <60% damage
+            amount_damage_boost = 0.35
+            mismatch_detected = True
+            mismatch_details = {
+                'type': 'CRITICAL_MISMATCH',
+                'reason': f'Very high claim (₹{claim_amount:,.0f}) with insufficient damage ({damage_percentage:.1f}%)',
+                'boost': 0.35,
+                'severity': 'CRITICAL'
+            }
+        elif claim_amount > 80000 and damage_percentage < 40:  # >80K claim, <40% damage
+            amount_damage_boost = 0.25
+            mismatch_detected = True
+            mismatch_details = {
+                'type': 'HIGH_MISMATCH',
+                'reason': f'High claim (₹{claim_amount:,.0f}) with low damage ({damage_percentage:.1f}%)',
+                'boost': 0.25,
+                'severity': 'HIGH'
+            }
+        elif claim_amount > 50000 and severity_level == "LOW":  # >50K with LOW severity
+            amount_damage_boost = 0.15
+            mismatch_detected = True
+            mismatch_details = {
+                'type': 'MODERATE_MISMATCH',
+                'reason': f'Moderate claim (₹{claim_amount:,.0f}) with LOW severity damage',
+                'boost': 0.15,
+                'severity': 'MEDIUM'
+            }
         
+        # Conversely: Low claim with high damage = LIKELY LEGITIMATE (reduce score slightly)
+        if claim_amount < 30000 and damage_percentage > 20:
+            amount_damage_boost = -0.10  # Reduce fraud score
+            mismatch_details = {
+                'type': 'REASONABLE_CLAIM',
+                'reason': f'Low claim (₹{claim_amount:,.0f}) matches high damage ({damage_percentage:.1f}%)',
+                'boost': -0.10,
+                'severity': 'INFO'
+            }
+
+        # =====================================================================
+        # 🔐 VERIFICATION PHASE (FOR INFORMATION ONLY - NOT SCORED)
+        # =====================================================================
+        dl_info = verify_dl(dl_number, expiry_date)
+        rto_info = verify_rto(reg_no, make, year)
+        fir_info = verify_fir(fir_no)
+
+        # Aggregate verification reliability (0 → unreliable, 1 → verified)
+        verification_reliability = aggregate_verification(dl_info, rto_info, fir_info)
+
+        # 🚨 IMPORTANT: Verification does NOT affect fraud score anymore
+        # It's purely informational for the investigator
+        
+        # Final fusion considering ONLY tabular + image + amount-damage mismatch
+        final_fusion_score = base_fusion_score + amount_damage_boost
+        final_fusion_score = max(0.0, min(final_fusion_score, 0.99))  # Clamp to [0, 0.99]
+
+        # === DECISION ===
         fraud_threshold = 0.5
         final_prediction = 1 if final_fusion_score > fraud_threshold else 0
-        
+
+        # === FINAL STRUCTURE ===
         return {
-            'input_probabilities': {
-                'tabular_fraud_probability': float(tabular_fraud_prob),
-                'tabular_confidence': float(tabular_confidence),
-                'image_fraud_probability': float(image_fraud_prob),
-                'image_confidence': float(image_confidence)
+            "input_probabilities": {
+                "tabular_fraud_probability": float(tabular_fraud_prob),
+                "tabular_confidence": float(tabular_confidence),
+                "image_fraud_probability": float(image_fraud_prob),
+                "image_confidence": float(image_confidence),
+                "verification_reliability": float(verification_reliability)  # Info only
             },
-            'weight_calculation': {
-                'total_confidence': float(total_confidence),
-                'tabular_weight': float(tabular_weight),
-                'image_weight': float(image_weight)
+            "weight_calculation": {
+                "total_confidence": float(total_confidence),
+                "tabular_weight": float(tabular_weight),
+                "image_weight": float(image_weight),
+                "weight_formula": "weight = confidence / total_confidence"
             },
-            'fusion_methods': {
-                'weighted_average': {'score': float(weighted_fusion)},
-                'geometric_mean': {'score': float(geometric_fusion)},
-                'maximum': {'score': float(max_fusion)},
-                'harmonic_mean': {'score': float(harmonic_fusion)}
+            "fusion_methods": {
+                "weighted_average": {
+                    "score": float(weighted_fusion),
+                    "formula": f"({tabular_weight:.3f} × {tabular_fraud_prob:.3f}) + ({image_weight:.3f} × {image_fraud_prob:.3f})"
+                },
+                "geometric_mean": {
+                    "score": float(geometric_fusion),
+                    "formula": f"√({tabular_fraud_prob:.3f} × {image_fraud_prob:.3f})"
+                }
             },
-            'final_fusion': {
-                'alpha': float(alpha),
-                'beta': float(beta),
-                'final_score': float(final_fusion_score),
-                'threshold': float(fraud_threshold),
-                'prediction': int(final_prediction)
+            
+            # 🆕 Amount-Damage Analysis
+            "amount_damage_analysis": {
+                "claim_amount": float(claim_amount),
+                "damage_percentage": float(damage_percentage),
+                "severity_level": severity_level,
+                "mismatch_detected": mismatch_detected,
+                "mismatch_details": mismatch_details,
+                "boost_applied": float(amount_damage_boost)
             },
-            'final_prediction': final_prediction,
-            'final_confidence': final_fusion_score
-        }
-        
-    except Exception as e:
-        print(f"Error in fusion: {e}")
-        return {
-            'final_prediction': 0,
-            'final_confidence': 0.35
+            
+            # Verification is info-only now
+            "verification_details": {
+                "dl": dl_info,
+                "rto": rto_info,
+                "fir": fir_info,
+                "combined_reliability": float(verification_reliability),
+                "note": "⚠️ Verification is for information only - NOT scored into fraud detection"
+            },
+            
+            "final_fusion": {
+                "alpha": 0.65,
+                "beta": 0.35,
+                "calculation": f"base_fusion + amount_damage_boost",
+                "base_fusion": float(base_fusion_score),
+                "amount_damage_boost": float(amount_damage_boost),
+                "final_score": float(final_fusion_score),
+                "threshold": float(fraud_threshold),
+                "prediction": int(final_prediction)
+            },
+            "final_prediction": final_prediction,
+            "final_confidence": final_fusion_score
         }
 
+    except Exception as e:
+        print(f"[Fusion Error] {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Safe fallback
+        return {
+            "error": str(e),
+            "input_probabilities": {
+                "tabular_fraud_probability": 0.4,
+                "tabular_confidence": 0.6,
+                "image_fraud_probability": 0.3,
+                "image_confidence": 0.7,
+                "verification_reliability": 0.5
+            },
+            "weight_calculation": {
+                "total_confidence": 1.3,
+                "tabular_weight": 0.46,
+                "image_weight": 0.54
+            },
+            "fusion_methods": {
+                "weighted_average": {"score": 0.35},
+                "geometric_mean": {"score": 0.32}
+            },
+            "amount_damage_analysis": {
+                "claim_amount": 0,
+                "damage_percentage": 0,
+                "mismatch_detected": False,
+                "boost_applied": 0.0
+            },
+            "verification_details": {
+                "dl": {"valid": False},
+                "rto": {"valid": False},
+                "fir": {"exists": False},
+                "note": "Verification info only"
+            },
+            "final_fusion": {
+                "base_fusion": 0.35,
+                "amount_damage_boost": 0.0,
+                "final_score": 0.35,
+                "threshold": 0.5,
+                "prediction": 0
+            },
+            "final_prediction": 0,
+            "final_confidence": 0.35
+        }
 
 # --- Auth Views ---
 
@@ -1001,10 +1150,14 @@ def policyholder_detail(request, username):
 
 # --- Main Prediction Endpoint ---
 
+# detection/views.py - UPDATED predict_claim function with database storage
+
+# detection/views.py - UPDATED predict_claim function with database storage
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def predict_claim(request):
-    """Enhanced predict claim with Multiple Images Support + Single Best Model + Document Verification"""
+    """Enhanced predict claim with Multiple Images Support + Database Storage"""
     
     # Extract request data
     username = request.data.get("username")
@@ -1013,8 +1166,8 @@ def predict_claim(request):
     claim_amount = float(request.data.get("claim_amount", 0))
     
     # NEW: Support multiple images
-    car_images = request.FILES.getlist("car_images")  # Multiple images
-    car_image_single = request.FILES.get("car_image")  # Backward compatibility with single image
+    car_images = request.FILES.getlist("car_images")
+    car_image_single = request.FILES.get("car_image")
     
     # Combine single and multiple image inputs
     if car_image_single and car_image_single not in car_images:
@@ -1022,12 +1175,14 @@ def predict_claim(request):
     
     threshold_strategy = request.data.get("threshold_strategy", "max_f1")
     
-    fir_number = request.data.get("fir_number")
+    # Document verification fields
+    fir_number = request.data.get("fir_number", "")
+    dl_number = request.data.get("dl_number", "")
+    vehicle_reg_no = request.data.get("vehicle_reg_no", "")
     accident_location = request.data.get("accident_location", "Unknown")
-    registration_number = request.data.get("registration_number")
+    registration_number = request.data.get("registration_number", "")
     chassis_number = request.data.get("chassis_number", "")
     engine_number = request.data.get("engine_number", "")
-    dl_number = request.data.get("dl_number")
     dob = request.data.get("dob")
     driver_name = request.data.get("driver_name", "")
 
@@ -1114,7 +1269,7 @@ def predict_claim(request):
             threshold_strategy
         )
         
-        # NEW: Process multiple images
+        # Process multiple images
         multi_image_results = process_multiple_images(image_paths, _image_model, device)
         
         # Use aggregated results for fusion
@@ -1128,13 +1283,33 @@ def predict_claim(request):
             }
         }
         
-        # Calculate fusion using aggregated image results
-        fusion_details = calculate_detailed_fusion(tabular_details, image_details)
+        # 🆕 UPDATED: Calculate fusion with claim_amount for amount-damage analysis
+        fusion_details = calculate_detailed_fusion(
+            tabular_details, 
+            image_details,
+            claim_amount=claim_amount,  # 🆕 Pass claim amount for amount-damage mismatch detection
+            dl_number=dl_number,
+            expiry_date=None,
+            reg_no=vehicle_reg_no,
+            make=getattr(policyholder, 'vehicle_make', None),
+            year=getattr(policyholder, 'year_of_vehicle', None),
+            fir_no=fir_number
+        )
         
     except Exception as e:
         print(f"❌ Prediction failed: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Cleanup temp files on error
+        try:
+            for image_path in image_paths:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            if temp_dir and os.path.exists(temp_dir):
+                os.rmdir(temp_dir)
+        except:
+            pass
         
         return Response({
             "error": f"Prediction failed: {str(e)}",
@@ -1146,117 +1321,108 @@ def predict_claim(request):
             "risk_level": "MEDIUM",
             "message": "Error occurred during prediction",
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    finally:
-        # Cleanup temp files
-        try:
-            for image_path in image_paths:
-                if os.path.exists(image_path):
-                    os.remove(image_path)
-            if temp_dir and os.path.exists(temp_dir):
-                os.rmdir(temp_dir)
-        except Exception as e:
-            print(f"⚠️ Cleanup warning: {e}")
 
-    # Document verification (same as before)
+    # =====================================================================
+    # 🆕 UPDATED: Document verification - INFO ONLY, NO SCORING
+    # =====================================================================
     base_fraud_score = fusion_details.get('final_confidence', 0.5)
-    document_boost = 0.0
     fraud_signals = []
     verification_results = {}
     
-    NO_POLICE_BOOST = config('NO_POLICE_REPORT_BOOST', default=0.25, cast=float)
-    INVALID_FIR_BOOST = config('INVALID_FIR_BOOST', default=0.30, cast=float)
-    INVALID_VEHICLE_BOOST = config('INVALID_VEHICLE_BOOST', default=0.35, cast=float)
-    EXPIRED_INSURANCE_BOOST = config('EXPIRED_INSURANCE_BOOST', default=0.40, cast=float)
-    INVALID_LICENSE_BOOST = config('INVALID_LICENSE_BOOST', default=0.30, cast=float)
-    EXPIRED_LICENSE_BOOST = config('EXPIRED_LICENSE_BOOST', default=0.35, cast=float)
+    # Get amount-damage mismatch info from fusion
+    amount_damage_analysis = fusion_details.get('amount_damage_analysis', {})
+    mismatch_details = amount_damage_analysis.get('mismatch_details', {})
     
-    # Police verification
+    # 🆕 Add amount-damage mismatch to fraud signals if detected
+    if amount_damage_analysis.get('mismatch_detected', False):
+        fraud_signals.append({
+            'type': mismatch_details.get('type', 'AMOUNT_DAMAGE_MISMATCH'),
+            'severity': mismatch_details.get('severity', 'MEDIUM'),
+            'message': mismatch_details.get('reason', 'Claim amount inconsistent with damage'),
+            'boost': mismatch_details.get('boost', 0.0)
+        })
+    
+    # Police verification - INFO ONLY (no scoring)
     if fir_number:
         police_result = verify_police_report(fir_number, accident_date, accident_location)
         verification_results['police'] = police_result
         
         if not police_result['verified']:
-            document_boost += INVALID_FIR_BOOST
             fraud_signals.append({
                 'type': 'INVALID_FIR',
-                'severity': 'CRITICAL',
-                'message': 'Police report could not be verified',
-                'boost': INVALID_FIR_BOOST
+                'severity': 'INFO',  # 🆕 Changed from CRITICAL
+                'message': 'Police report could not be verified (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
     else:
         if claim_amount > 50000:
-            document_boost += NO_POLICE_BOOST
             fraud_signals.append({
                 'type': 'NO_POLICE_REPORT_HIGH_VALUE',
-                'severity': 'HIGH',
-                'message': f'No police report for ₹{claim_amount:,.0f} claim',
-                'boost': NO_POLICE_BOOST
+                'severity': 'INFO',  # 🆕 Changed from HIGH
+                'message': f'No police report for ₹{claim_amount:,.0f} claim (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
         
         verification_results['police'] = {
             'verified': False,
-            'fraud_indicator': 'MEDIUM' if claim_amount > 50000 else 'LOW',
+            'fraud_indicator': 'INFO',  # 🆕 Changed from MEDIUM/LOW
             'message': 'No police report provided'
         }
     
-    # Vehicle verification
-    if registration_number:
-        vehicle_result = verify_vehicle_registration(registration_number, chassis_number, engine_number)
+    # Vehicle verification - INFO ONLY (no scoring)
+    if vehicle_reg_no:
+        vehicle_result = verify_vehicle_registration(vehicle_reg_no, chassis_number, engine_number)
         verification_results['vehicle'] = vehicle_result
         
         if not vehicle_result['verified']:
-            document_boost += INVALID_VEHICLE_BOOST
             fraud_signals.append({
                 'type': 'INVALID_VEHICLE',
-                'severity': 'CRITICAL',
-                'message': 'Vehicle registration could not be verified',
-                'boost': INVALID_VEHICLE_BOOST
+                'severity': 'INFO',  # 🆕 Changed from CRITICAL
+                'message': 'Vehicle registration could not be verified (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
         elif not vehicle_result.get('vehicle_details', {}).get('insurance_valid', True):
-            document_boost += EXPIRED_INSURANCE_BOOST
             fraud_signals.append({
                 'type': 'EXPIRED_INSURANCE',
-                'severity': 'CRITICAL',
-                'message': 'Vehicle insurance expired',
-                'boost': EXPIRED_INSURANCE_BOOST
+                'severity': 'INFO',  # 🆕 Changed from CRITICAL
+                'message': 'Vehicle insurance expired (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
     else:
         verification_results['vehicle'] = {
             'verified': False,
-            'fraud_indicator': 'LOW',
+            'fraud_indicator': 'INFO',
             'message': 'No vehicle registration provided'
         }
     
-    # License verification
+    # License verification - INFO ONLY (no scoring)
     if dl_number:
         license_result = verify_driving_license(dl_number, dob, driver_name)
         verification_results['license'] = license_result
         
         if not license_result['verified']:
-            document_boost += INVALID_LICENSE_BOOST
             fraud_signals.append({
                 'type': 'INVALID_LICENSE',
-                'severity': 'CRITICAL',
-                'message': 'Driving license could not be verified',
-                'boost': INVALID_LICENSE_BOOST
+                'severity': 'INFO',  # 🆕 Changed from CRITICAL
+                'message': 'Driving license could not be verified (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
         elif not license_result.get('license_details', {}).get('license_valid', True):
-            document_boost += EXPIRED_LICENSE_BOOST
             fraud_signals.append({
                 'type': 'EXPIRED_LICENSE',
-                'severity': 'HIGH',
-                'message': 'Driving license expired',
-                'boost': EXPIRED_LICENSE_BOOST
+                'severity': 'INFO',  # 🆕 Changed from HIGH
+                'message': 'Driving license expired (informational only)',
+                'boost': 0.0  # 🆕 No boost
             })
     else:
         verification_results['license'] = {
             'verified': False,
-            'fraud_indicator': 'LOW',
+            'fraud_indicator': 'INFO',
             'message': 'No driving license provided'
         }
     
-    # Calculate final score
-    final_fraud_score = min(base_fraud_score + document_boost, 0.99)
+    # 🆕 CRITICAL CHANGE: Use base_fraud_score directly (no document_boost)
+    final_fraud_score = base_fraud_score  # Already includes amount-damage analysis from fusion
     
     fraud_threshold = config('FRAUD_THRESHOLD', default=0.5, cast=float)
     fraud_detected = final_fraud_score >= fraud_threshold
@@ -1293,13 +1459,13 @@ def predict_claim(request):
             'next_steps': ['Verify claim amount', 'Process payment']
         }
     
-    # Prepare response with multi-image support
+    # Prepare complete response data
     response_data = {
-    "username": username,
-    "claim_description": claim_description,
-    "accident_date": accident_date,
-    "claim_amount": claim_amount,
-    "total_images_submitted": len(image_paths),
+        "username": username,
+        "claim_description": claim_description,
+        "accident_date": accident_date,
+        "claim_amount": claim_amount,
+        "total_images_submitted": len(image_paths),
         
         # Core fields
         "prediction": int(fraud_detected),
@@ -1312,29 +1478,34 @@ def predict_claim(request):
         "risk_level": risk_level,
         "message": f"{'🚨 FRAUD DETECTED' if fraud_detected else '✅ LEGITIMATE'} - {risk_level} risk",
         
+        # 🆕 UPDATED: Fraud analysis without document boost
         "fraud_analysis": {
             "ml_base_score": float(base_fraud_score),
-            "document_boost": float(document_boost),
+            "amount_damage_boost": float(amount_damage_analysis.get('boost_applied', 0.0)),
+            "document_boost": 0.0,  # 🆕 Always 0 now
             "final_fraud_score": float(final_fraud_score),
             "fraud_threshold": float(fraud_threshold),
-            "calculation": f"{base_fraud_score:.3f} (ML) + {document_boost:.3f} (Docs) = {final_fraud_score:.3f}",
+            "calculation": f"{base_fraud_score:.3f} (ML + Amount-Damage Analysis) = {final_fraud_score:.3f}",
             "signals_detected": len(fraud_signals),
-            "threshold_strategy_used": threshold_strategy
+            "threshold_strategy_used": threshold_strategy,
+            "note": "⚠️ Document verification is informational only and does not affect fraud score"
         },
         
         "fraud_signals": fraud_signals,
         "recommended_action": recommended_action,
         
+        # 🆕 UPDATED: Document verification with note
         "document_verification": {
             "police_report": verification_results.get('police'),
             "vehicle_registration": verification_results.get('vehicle'),
-            "driving_license": verification_results.get('license')
+            "driving_license": verification_results.get('license'),
+            "note": "⚠️ These checks are for investigator reference only - they do not affect the fraud score"
         },
         
         "documents_provided": {
-            "fir_number": fir_number is not None,
-            "registration_number": registration_number is not None,
-            "dl_number": dl_number is not None
+            "fir_number": fir_number is not None and fir_number != "",
+            "registration_number": vehicle_reg_no is not None and vehicle_reg_no != "",
+            "dl_number": dl_number is not None and dl_number != ""
         },
         
         "detailed_calculations": {
@@ -1343,13 +1514,13 @@ def predict_claim(request):
             "fusion_analysis": fusion_details
         },
         
-    # Multi-image specific results
-    "multi_image_analysis": {
-        "individual_images": multi_image_results['individual_image_results'],
-        "aggregated_metrics": multi_image_results['aggregated_results']
-    },
-
-     "annotated_images": multi_image_results['individual_damage_detections'],  # ← ADD THIS LINE
+        # Multi-image specific results
+        "multi_image_analysis": {
+            "individual_images": multi_image_results['individual_image_results'],
+            "aggregated_metrics": multi_image_results['aggregated_results']
+        },
+        
+        "annotated_images": multi_image_results['individual_damage_detections'],
         
         "debug_info": {
             "tabular_features_shape": list(tabular_features.shape),
@@ -1362,6 +1533,62 @@ def predict_claim(request):
             "total_annotated_images": len(multi_image_results['individual_damage_detections'])
         }
     }
+    
+    # ========================================================================
+    # 🆕 SAVE TO DATABASE - Import ClaimDatabaseHandler at top of file
+    # ========================================================================
+    from .claim_handler import ClaimDatabaseHandler
+    
+    try:
+        print("💾 Saving claim to database...")
+        
+        # Prepare claim data for database
+        claim_data = {
+            'claim_description': claim_description,
+            'accident_date': accident_date,
+            'claim_amount': claim_amount,
+            'dl_number': dl_number,
+            'vehicle_reg_no': vehicle_reg_no,
+            'fir_number': fir_number,
+        }
+        
+        # Create claim in database with fraud detection results
+        saved_claim = ClaimDatabaseHandler.create_claim(
+            policyholder=policyholder,
+            claim_data=claim_data,
+            fraud_detection_result=response_data,
+            image_files=car_images  # Pass the uploaded files
+        )
+        
+        print(f"✅ Claim saved successfully: {saved_claim.claim_number}")
+        
+        # Add claim information to response
+        response_data['claim_saved'] = True
+        response_data['claim_id'] = saved_claim.id
+        response_data['claim_number'] = saved_claim.claim_number
+        response_data['claim_status'] = saved_claim.status
+        response_data['claim_submission_message'] = f"Claim {saved_claim.claim_number} submitted successfully and saved to database"
+        
+    except Exception as e:
+        print(f"⚠️ Failed to save claim to database: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Don't fail the entire request if database save fails
+        response_data['claim_saved'] = False
+        response_data['save_error'] = str(e)
+    
+    # ========================================================================
+    # Cleanup temp files
+    # ========================================================================
+    try:
+        for image_path in image_paths:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+        if temp_dir and os.path.exists(temp_dir):
+            os.rmdir(temp_dir)
+    except Exception as e:
+        print(f"⚠️ Cleanup warning: {e}")
     
     return Response(response_data)
 

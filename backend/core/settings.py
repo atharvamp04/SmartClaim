@@ -11,6 +11,9 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+from datetime import timedelta
+import os
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -65,7 +68,10 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # your frontend URL
+    "http://127.0.0.1:3000",
 ]
+
+CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'core.urls'
 
@@ -103,6 +109,27 @@ DATABASES = {
 
 
 
+SIMPLE_JWT = {
+    # Access token validity (default: 5 minutes)
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=5),
+
+    # Refresh token validity (default: 1 day)
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+
+    # Optional — allow refresh tokens to renew themselves
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+
+    # Signing algorithm (default HS256)
+    "ALGORITHM": "HS256",
+
+    # Optional — store secret key or public/private key settings
+    "SIGNING_KEY": SECRET_KEY,
+
+    # Optional — enable sliding tokens (if using them)
+    "SLIDING_TOKEN_LIFETIME": timedelta(hours=8),
+    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=3),
+}
 
 
 # Password validation
@@ -145,3 +172,10 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')

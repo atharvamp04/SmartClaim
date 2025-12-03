@@ -1,8 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+
+const ToastNotification = ({ message, type, claimNumber, onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onClose();
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const icons = {
+    success: (
+      <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+    error: (
+      <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    )
+  };
+
+  const colors = {
+    success: 'bg-white border-l-4 border-green-500 shadow-lg',
+    error: 'bg-white border-l-4 border-red-500 shadow-lg'
+  };
+
+  return (
+    <div className={`fixed top-4 right-4 z-50 max-w-sm w-full animate-slide-in ${colors[type]} rounded-lg p-4`}>
+      <div className="flex items-start">
+        <div className="flex-shrink-0">{icons[type]}</div>
+        <div className="ml-3 flex-1">
+          <p className="text-sm font-semibold text-gray-900">
+            {type === 'success' ? '✅ Claim Saved' : '❌ Save Failed'}
+          </p>
+          <p className="mt-1 text-sm text-gray-600">{message}</p>
+          {claimNumber && (
+            <p className="mt-2 text-xs font-mono text-gray-500 bg-gray-50 px-2 py-1 rounded">
+              {claimNumber}
+            </p>
+          )}
+        </div>
+        <button onClick={onClose} className="ml-4 flex-shrink-0 text-gray-400 hover:text-gray-600">
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <style jsx>{`
+        @keyframes slide-in {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        .animate-slide-in { animation: slide-in 0.3s ease-out; }
+      `}</style>
+    </div>
+  );
+};
+
 
 export default function ClaimPage() {
   const router = useRouter();
@@ -14,6 +73,9 @@ export default function ClaimPage() {
     claim_description: "",
     accident_date: "",
     claim_amount: "",
+    dl_number: "",
+    vehicle_reg_no: "",
+    fir_number: "",
   });
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
@@ -23,7 +85,11 @@ export default function ClaimPage() {
   const [result, setResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<string>("results");
   const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
+  const [toast, setToast] = useState(null);
 
+
+
+  
   // ... (previous form handling code remains the same) ...
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData((prev) => ({
@@ -168,6 +234,9 @@ const removeImage = (indexToRemove: number) => {
       data.append("accident_date", formData.accident_date);
       data.append("claim_amount", formData.claim_amount);
       imageFiles.forEach((file) => {data.append("car_images", file);});
+      data.append("dl_number", formData.dl_number.trim());
+      data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
+      data.append("fir_number", formData.fir_number.trim());
 
       const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
         method: "POST",
@@ -188,6 +257,20 @@ const removeImage = (indexToRemove: number) => {
 
       setResult(resData);
       setLoading(false);
+
+            if (resData.claim_saved) {
+        setToast({
+          type: 'success',
+          message: `Saved to database. Status: ${resData.claim_status}`,
+          claimNumber: resData.claim_number
+        });
+      } else if (resData.save_error) {
+        setToast({
+          type: 'error',
+          message: 'Analysis complete but database save failed',
+          claimNumber: null
+        });
+      }
 
     } catch (err) {
       console.error("Error:", err);
@@ -632,6 +715,8 @@ const removeImage = (indexToRemove: number) => {
                 </div>
               )}
 
+
+
 {/* Tabular Analysis Tab */}
 {activeTab === "tabular" && result.detailed_calculations?.tabular_analysis && (
   <div className="space-y-6">
@@ -1048,97 +1133,149 @@ const removeImage = (indexToRemove: number) => {
                   
 
                   {/* Fusion Process Tab */}
-                  {activeTab === "fusion" && result.detailed_calculations?.fusion_analysis && (
-                    <div className="space-y-6">
-                      <CalculationCard title="Input Probabilities">
-                        <div className="grid md:grid-cols-2 gap-4">
-                          <div className="p-4 bg-blue-50 rounded-lg">
-                            <h5 className="font-medium text-blue-900 mb-2">Tabular Model</h5>
-                            <p className="text-sm">Fraud Probability: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.tabular_fraud_probability * 100).toFixed(1)}%</span></p>
-                            <p className="text-sm">Confidence: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.tabular_confidence * 100).toFixed(1)}%</span></p>
-                          </div>
-                          <div className="p-4 bg-purple-50 rounded-lg">
-                            <h5 className="font-medium text-purple-900 mb-2">Image Model</h5>
-                            <p className="text-sm">Fraud Probability: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.image_fraud_probability * 100).toFixed(1)}%</span></p>
-                            <p className="text-sm">Confidence: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.image_confidence * 100).toFixed(1)}%</span></p>
-                          </div>
-                        </div>
-                      </CalculationCard>
+{activeTab === "fusion" && result.detailed_calculations?.fusion_analysis && (
+  <div className="space-y-6">
 
-                      <CalculationCard title="Weight Calculation">
-                        <div className="space-y-4">
-                          <div className="p-4 bg-gray-50 border rounded-lg">
-                            <h5 className="font-medium text-gray-900 mb-2">Formula</h5>
-                            <div className="text-sm font-mono bg-white p-3 rounded border">
-                              {result.detailed_calculations.fusion_analysis.weight_calculation.weight_formula}
-                            </div>
-                          </div>
-                          <div className="grid md:grid-cols-3 gap-4">
-                            <div className="text-center">
-                              <p className="text-sm text-gray-600">Total Confidence</p>
-                              <p className="text-lg font-bold">{result.detailed_calculations.fusion_analysis.weight_calculation.total_confidence.toFixed(3)}</p>
-                            </div>
-                            <div className="text-center">
-                              <p className="text-sm text-gray-600">Tabular Weight</p>
-                              <p className="text-lg font-bold text-blue-600">{result.detailed_calculations.fusion_analysis.weight_calculation.tabular_weight.toFixed(3)}</p>
-                            </div>
-                            <div className="text-center">
-                              <p className="text-sm text-gray-600">Image Weight</p>
-                              <p className="text-lg font-bold text-purple-600">{result.detailed_calculations.fusion_analysis.weight_calculation.image_weight.toFixed(3)}</p>
-                            </div>
-                          </div>
-                        </div>
-                      </CalculationCard>
+    {/* Input Probabilities */}
+    <CalculationCard title="Input Probabilities">
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h5 className="font-medium text-blue-900 mb-2">Tabular Model</h5>
+          <p className="text-sm">Fraud Probability: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.tabular_fraud_probability * 100).toFixed(1)}%</span></p>
+          <p className="text-sm">Confidence: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.tabular_confidence * 100).toFixed(1)}%</span></p>
+        </div>
 
-                      <CalculationCard title="Fusion Methods Comparison">
-                        <div className="space-y-4">
-                          {Object.entries(result.detailed_calculations.fusion_analysis.fusion_methods).map(([method, data]: [string, any]) => (
-                            <div key={method} className="p-4 border rounded-lg">
-                              <div className="flex justify-between items-center mb-2">
-                                <h5 className="font-medium text-gray-900 capitalize">{method.replace('_', ' ')}</h5>
-                                <span className="text-lg font-bold">{(data.score * 100).toFixed(1)}%</span>
-                              </div>
-                              <div className="text-sm text-gray-600 font-mono bg-gray-50 p-2 rounded">
-                                {data.formula}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </CalculationCard>
+        <div className="p-4 bg-purple-50 rounded-lg">
+          <h5 className="font-medium text-purple-900 mb-2">Image Model</h5>
+          <p className="text-sm">Fraud Probability: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.image_fraud_probability * 100).toFixed(1)}%</span></p>
+          <p className="text-sm">Confidence: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.image_confidence * 100).toFixed(1)}%</span></p>
+        </div>
 
-                      <CalculationCard title="Final Fusion Result" className="border-2 border-green-200">
-                        <div className="space-y-4">
-                          <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                            <h5 className="font-medium text-green-900 mb-2">Final Calculation</h5>
-                            <div className="text-sm font-mono bg-white p-3 rounded border">
-                              {result.detailed_calculations.fusion_analysis.final_fusion.calculation}
-                            </div>
-                            <div className="mt-2 text-sm">
-                              Where α = {result.detailed_calculations.fusion_analysis.final_fusion.alpha} (weighted average weight)
-                              <br />
-                              β = {result.detailed_calculations.fusion_analysis.final_fusion.beta} (geometric mean weight)
-                            </div>
-                          </div>
-                          <div className="grid md:grid-cols-3 gap-4">
-                            <div className="text-center p-4 bg-yellow-50 rounded-lg">
-                              <p className="text-sm text-gray-600">Final Score</p>
-                              <p className="text-2xl font-bold">{(result.detailed_calculations.fusion_analysis.final_fusion.final_score * 100).toFixed(1)}%</p>
-                            </div>
-                            <div className="text-center p-4 bg-blue-50 rounded-lg">
-                              <p className="text-sm text-gray-600">Threshold</p>
-                              <p className="text-2xl font-bold">{(result.detailed_calculations.fusion_analysis.final_fusion.threshold * 100).toFixed(0)}%</p>
-                            </div>
-                            <div className={`text-center p-4 rounded-lg ${result.fraud_detected ? 'bg-red-50' : 'bg-green-50'}`}>
-                              <p className="text-sm text-gray-600">Decision</p>
-                              <p className={`text-2xl font-bold ${result.fraud_detected ? 'text-red-600' : 'text-green-600'}`}>
-                                {result.detailed_calculations.fusion_analysis.final_fusion.prediction === 1 ? 'FRAUD' : 'NO FRAUD'}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </CalculationCard>
-                    </div>
-                  )}
+        <div className="p-4 bg-green-50 rounded-lg">
+          <h5 className="font-medium text-green-900 mb-2">Verification Layer</h5>
+          <p className="text-sm">Combined Reliability: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.input_probabilities.verification_reliability * 100).toFixed(1)}%</span></p>
+          <p className="text-sm text-gray-600">Influences overall fraud likelihood</p>
+        </div>
+      </div>
+    </CalculationCard>
+
+    <CalculationCard title="Weight Calculation">
+  {result.detailed_calculations?.fusion_analysis?.weight_calculation ? (
+    <div className="space-y-4">
+      <div className="p-4 bg-gray-50 border rounded-lg">
+        <h5 className="font-medium text-gray-900 mb-2">Formula</h5>
+        <div className="text-sm font-mono bg-white p-3 rounded border">
+          {result.detailed_calculations.fusion_analysis.weight_calculation.weight_formula || "N/A"}
+        </div>
+      </div>
+      <div className="grid md:grid-cols-4 gap-4">
+        <div className="text-center">
+          <p className="text-sm text-gray-600">Total Confidence</p>
+          <p className="text-lg font-bold">
+            {result.detailed_calculations.fusion_analysis.weight_calculation.total_confidence?.toFixed(3) || "—"}
+          </p>
+        </div>
+        <div className="text-center">
+          <p className="text-sm text-gray-600">Tabular Weight</p>
+          <p className="text-lg font-bold text-blue-600">
+            {result.detailed_calculations.fusion_analysis.weight_calculation.tabular_weight?.toFixed(3) || "—"}
+          </p>
+        </div>
+        <div className="text-center">
+          <p className="text-sm text-gray-600">Image Weight</p>
+          <p className="text-lg font-bold text-purple-600">
+            {result.detailed_calculations.fusion_analysis.weight_calculation.image_weight?.toFixed(3) || "—"}
+          </p>
+        </div>
+        <div className="text-center">
+          <p className="text-sm text-gray-600">Verification γ</p>
+          <p className="text-lg font-bold text-green-600">
+            {result.detailed_calculations.fusion_analysis.final_fusion?.gamma
+              ? (result.detailed_calculations.fusion_analysis.final_fusion.gamma * 100).toFixed(0)
+              : "—"}%
+          </p>
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div className="p-4 text-gray-500 italic">Weight calculation data unavailable.</div>
+  )}
+</CalculationCard>
+
+
+    {/* Fusion Methods */}
+    <CalculationCard title="Fusion Methods Comparison">
+      <div className="space-y-4">
+        {Object.entries(result.detailed_calculations.fusion_analysis.fusion_methods).map(([method, data]: [string, any]) => (
+          <div key={method} className="p-4 border rounded-lg">
+            <div className="flex justify-between items-center mb-2">
+              <h5 className="font-medium text-gray-900 capitalize">{method.replace('_', ' ')}</h5>
+              <span className="text-lg font-bold">{(data.score * 100).toFixed(1)}%</span>
+            </div>
+            <div className="text-sm text-gray-600 font-mono bg-gray-50 p-2 rounded">
+              {data.formula}
+            </div>
+          </div>
+        ))}
+      </div>
+    </CalculationCard>
+
+    {/* Verification Breakdown */}
+    <CalculationCard title="Verification Reliability Breakdown">
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="p-4 bg-yellow-50 rounded-lg">
+          <h5 className="font-medium text-yellow-900 mb-2">Driving License (DL)</h5>
+          <p className="text-sm">Valid: <span className="font-bold">{result.detailed_calculations.fusion_analysis.verification_details.dl.valid ? 'Yes' : 'No'}</span></p>
+          <p className="text-sm">DL Score: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.verification_details.dl.dl_score * 100).toFixed(1)}%</span></p>
+        </div>
+        <div className="p-4 bg-blue-50 rounded-lg">
+          <h5 className="font-medium text-blue-900 mb-2">RTO Vehicle Info</h5>
+          <p className="text-sm">Valid: <span className="font-bold">{result.detailed_calculations.fusion_analysis.verification_details.rto.valid ? 'Yes' : 'No'}</span></p>
+          <p className="text-sm">RTO Score: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.verification_details.rto.rto_score * 100).toFixed(1)}%</span></p>
+        </div>
+        <div className="p-4 bg-red-50 rounded-lg">
+          <h5 className="font-medium text-red-900 mb-2">FIR Records</h5>
+          <p className="text-sm">Exists: <span className="font-bold">{result.detailed_calculations.fusion_analysis.verification_details.fir.exists ? 'Yes' : 'No'}</span></p>
+          <p className="text-sm">FIR Score: <span className="font-bold">{(result.detailed_calculations.fusion_analysis.verification_details.fir.fir_score * 100).toFixed(1)}%</span></p>
+        </div>
+      </div>
+    </CalculationCard>
+
+    {/* Final Fusion */}
+    <CalculationCard title="Final Fusion Result" className="border-2 border-green-200">
+      <div className="space-y-4">
+        <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+          <h5 className="font-medium text-green-900 mb-2">Final Calculation</h5>
+          <div className="text-sm font-mono bg-white p-3 rounded border">
+            {result.detailed_calculations.fusion_analysis.final_fusion.calculation}
+          </div>
+          <div className="mt-2 text-sm">
+            Where α = {result.detailed_calculations.fusion_analysis.final_fusion.alpha} (Weighted Avg) <br />
+            β = {result.detailed_calculations.fusion_analysis.final_fusion.beta} (Geometric Mean) <br />
+            γ = {result.detailed_calculations.fusion_analysis.final_fusion.gamma} (Verification Influence)
+          </div>
+        </div>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="text-center p-4 bg-yellow-50 rounded-lg">
+            <p className="text-sm text-gray-600">Final Score</p>
+            <p className="text-2xl font-bold">{(result.detailed_calculations.fusion_analysis.final_fusion.final_score * 100).toFixed(1)}%</p>
+          </div>
+          <div className="text-center p-4 bg-blue-50 rounded-lg">
+            <p className="text-sm text-gray-600">Threshold</p>
+            <p className="text-2xl font-bold">{(result.detailed_calculations.fusion_analysis.final_fusion.threshold * 100).toFixed(0)}%</p>
+          </div>
+          <div className={`text-center p-4 rounded-lg ${result.fraud_detected ? 'bg-red-50' : 'bg-green-50'}`}>
+            <p className="text-sm text-gray-600">Decision</p>
+            <p className={`text-2xl font-bold ${result.fraud_detected ? 'text-red-600' : 'text-green-600'}`}>
+              {result.detailed_calculations.fusion_analysis.final_fusion.prediction === 1 ? 'FRAUD' : 'NO FRAUD'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </CalculationCard>
+  </div>
+)}
+
                 </div>
               </div>
             </div>
@@ -1179,20 +1316,78 @@ const removeImage = (indexToRemove: number) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_description">
-                  Claim Description <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  id="claim_description"
-                  name="claim_description"
-                  value={formData.claim_description}
-                  onChange={handleChange}
-                  required
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  rows={4}
-                  placeholder="Describe the accident, damage, and circumstances in detail..."
-                />
-              </div>
+  <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_description">
+    Claim Description <span className="text-red-500">*</span>
+  </label>
+  <textarea
+    id="claim_description"
+    name="claim_description"
+    value={formData.claim_description}
+    onChange={handleChange}
+    required
+    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+    rows={4}
+    placeholder="Describe the accident, damage, and circumstances in detail..."
+  />
+</div>
+
+{/* --- NEW FIELDS START HERE --- */}
+<div className="grid md:grid-cols-3 gap-6">
+  {/* DL Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="dl_number">
+      Driving License Number <span className="text-red-500">*</span>
+    </label>
+    <input
+      id="dl_number"
+      name="dl_number"
+      type="text"
+      value={formData.dl_number || ""}
+      onChange={handleChange}
+      placeholder="e.g. MH14 20201234567"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      required
+    />
+    <p className="text-sm text-gray-500 mt-1">Format: State code + Year + Serial (e.g. MH14 20201234567)</p>
+  </div>
+
+  {/* Vehicle Registration Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="vehicle_reg_no">
+      Vehicle Registration No. <span className="text-red-500">*</span>
+    </label>
+    <input
+      id="vehicle_reg_no"
+      name="vehicle_reg_no"
+      type="text"
+      value={formData.vehicle_reg_no || ""}
+      onChange={handleChange}
+      placeholder="e.g. MH12AB1234"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+      required
+    />
+    <p className="text-sm text-gray-500 mt-1">Enter the vehicle’s official RTO number</p>
+  </div>
+
+  {/* FIR Number */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="fir_number">
+      FIR / Police Report No.
+    </label>
+    <input
+      id="fir_number"
+      name="fir_number"
+      type="text"
+      value={formData.fir_number || ""}
+      onChange={handleChange}
+      placeholder="e.g. FIR2025-123456"
+      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+    />
+    <p className="text-sm text-gray-500 mt-1">Optional — if an FIR was registered for the accident</p>
+  </div>
+</div>
+{/* --- NEW FIELDS END HERE --- */}
+
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="claim_amount">
@@ -1309,6 +1504,9 @@ const removeImage = (indexToRemove: number) => {
     claim_description: "",
     accident_date: "",
     claim_amount: "",
+    dl_number: "",
+    vehicle_reg_no: "",
+    fir_number: "",
   });
   setImageFiles([]);
   setImagePreviews([]);
@@ -1330,6 +1528,17 @@ const removeImage = (indexToRemove: number) => {
           )}
         </div>
       </div>
+          {/* Toast Notification - ADD THIS */}
+      {toast && (
+        <ToastNotification
+          type={toast.type}
+          message={toast.message}
+          claimNumber={toast.claimNumber}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
+    
+    
   );
 }

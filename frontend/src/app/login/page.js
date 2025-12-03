@@ -52,8 +52,12 @@ export default function LoginPage() {
       alert("Login successful!");
       setLoading(false);
 
-      // Optional: redirect after login
-      router.push("/");
+      // Redirect based on username
+      if (username === "ap") {
+        router.push("/admin");
+      } else {
+        router.push("/");
+      }
     } catch (err) {
       setError("An error occurred. Please try again.");
       setLoading(false);
