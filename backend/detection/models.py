@@ -23,6 +23,7 @@ class Policyholder(models.Model):
     past_number_of_claims = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    vehicle_model = models.CharField(max_length=100, default='default')
 
     def __str__(self):
         return self.username
