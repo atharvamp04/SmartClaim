@@ -68,33 +68,27 @@ export default function ClaimPage() {
   const searchParams = useSearchParams();
   const username = searchParams.get("username") || "";
 
-// State initialization
-const [formData, setFormData] = useState({
-  username: username,
-  claim_description: "",
-  accident_date: "",
-  vehicle_make: "",
-  vehicle_model: "",
-  dl_number: "",
-  vehicle_reg_no: "",
-  fir_number: "",
-});
-const [imageFiles, setImageFiles] = useState<File[]>([]);
-const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-const [error, setError] = useState("");
-const [loading, setLoading] = useState(false);
-const [result, setResult] = useState<any>(null);
-const [activeTab, setActiveTab] = useState<string>("results");
-const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
-const [toast, setToast] = useState(null);
+  const [formData, setFormData] = useState({
+    username: username,
+    claim_description: "",
+    accident_date: "",
+    claim_amount: "",
+    dl_number: "",
+    vehicle_reg_no: "",
+    fir_number: "",
 
-// Handle form field changes
-const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-  setFormData((prev) => ({
-    ...prev,
-    [e.target.name]: e.target.value,
-  }));
-};
+  });
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<string>("results");
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
+  const [toast, setToast] = useState(null);
+
+
 
 // Handle select dropdown changes (for vehicle_make)
 const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -319,14 +313,34 @@ const handleSubmit = async (e: React.FormEvent) => {
     // Try to parse as JSON
     let resData;
     try {
-      resData = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error("❌ Failed to parse response as JSON:", parseError);
-      console.error("Response was:", responseText);
-      setError(`Invalid response format. Expected JSON but got: ${responseText.substring(0, 100)}...`);
-      setLoading(false);
-      return;
-    }
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        setError("You must be logged in to submit a claim");
+        setLoading(false);
+        return;
+      }
+
+      const data = new FormData();
+      data.append("username", formData.username.trim());
+      data.append("claim_description", formData.claim_description.trim());
+      data.append("accident_date", formData.accident_date);
+      data.append("claim_amount", formData.claim_amount);
+      data.append("car_image", imageFile!);
+      data.append("dl_number", formData.dl_number.trim());
+      data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
+      data.append("fir_number", formData.fir_number.trim());
+
+
+      const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: data,
+      });
+
+      const resData = await res.json();
+      console.log("Response from server:", resData);
 
     console.log("✅ Parsed Response Data:", resData);
 
