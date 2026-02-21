@@ -26,11 +26,16 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+# Add to existing imports section
 from django.contrib.auth.models import User
-from django.db import connection
-
-from .serializers import RegisterSerializer, PolicyholderSerializer
-from .models import Policyholder
+from .models import Policyholder, UserProfile, Claim, ClaimHistory, SurveyorFieldPhoto
+from .serializers import (
+    RegisterSerializer, PolicyholderSerializer,
+    SurveyorListSerializer, AssignSurveyorSerializer, SurveyReportSerializer
+)
+from django.utils import timezone
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import authenticate
 
 
 
@@ -2066,6 +2071,18 @@ def validate_claim_breakdown(breakdown):
     return validation_result
 ##################
 
+# ============================================================
+# NEW: Role Helper Functions
+# ============================================================
+
+def is_admin(user):
+    return user.is_superuser or (hasattr(user, 'profile') and user.profile.role == 'admin')
+
+def is_surveyor(user):
+    return hasattr(user, 'profile') and user.profile.role == 'surveyor'
+
+##################
+
 # --- Auth Views ---
 
 @api_view(['GET'])
@@ -2079,6 +2096,61 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
 
+
+# ============================================================
+# NEW: Login with Role
+# ============================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_with_role(request):
+    """
+    POST /api/auth/login-with-role/
+    Body: { username, password }
+    Returns: JWT tokens + user role for frontend routing
+    """
+    username = request.data.get('username')
+    password = request.data.get('password')
+
+    if not username or not password:
+        return Response({'error': 'Username and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = authenticate(username=username, password=password)
+    if not user:
+        logger.warning(f"Login failed for username: {username}")
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    refresh = RefreshToken.for_user(user)
+
+    role = 'customer'
+    employee_id = None
+
+    # Check if superuser (admin)
+    if user.is_superuser:
+        role = 'admin'
+        logger.info(f"Admin login: {username}")
+    else:
+        # Try to get UserProfile
+        try:
+            profile = UserProfile.objects.get(user=user)
+            role = profile.role
+            if role:
+                role = role.lower()  # Ensure lowercase for API response
+            else:
+                role = 'customer'
+            employee_id = profile.employee_id
+            logger.info(f"User {username} logged in with role: {role}")
+        except UserProfile.DoesNotExist:
+            logger.warning(f"UserProfile not found for user: {username}, defaulting to customer")
+            role = 'customer'
+
+    return Response({
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'role': role,
+        'username': user.username,
+        'employee_id': employee_id,
+    }, status=status.HTTP_200_OK)
 
 class PolicyholderCreateView(APIView):
     permission_classes = [AllowAny]
@@ -2571,3 +2643,462 @@ def health_check(request):
         },
         "message": "All systems operational" if _models_loaded else "Models need to be loaded"
     })
+
+
+# ==========================================
+# SURVEYOR ENDPOINTS
+# ==========================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def surveyor_assigned_claims(request):
+    """
+    Get all claims assigned to the current surveyor.
+    """
+    try:
+        logger.info(f"=== surveyor_assigned_claims called by user: {request.user.username} ===")
+        
+        # Get surveyor user profile
+        user_profile = UserProfile.objects.get(user=request.user)
+        logger.info(f"User profile role: {user_profile.role}")
+        
+        if user_profile.role != 'surveyor':
+            logger.warning(f"User {request.user.username} is not a surveyor (role: {user_profile.role})")
+            return Response(
+                {"error": "User is not a surveyor"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Query claims assigned to this surveyor
+        logger.info(f"Querying claims for surveyor user_id: {request.user.id}")
+        assigned_claims_qs = Claim.objects.filter(
+            assigned_surveyor=request.user
+        ).select_related('policyholder', 'assigned_surveyor').order_by('-assigned_at', '-submitted_at')
+        
+        logger.info(f"Found {assigned_claims_qs.count()} claims for surveyor {request.user.username}")
+        
+        assigned_claims = []
+        for claim in assigned_claims_qs:
+            logger.info(f"Processing claim: {claim.claim_number}")
+            claim_data = {
+                "id": claim.id,
+                "claim_number": claim.claim_number,
+                "status": claim.status,
+                "claim_description": claim.claim_description,
+                "accident_date": claim.accident_date.isoformat() if claim.accident_date else None,
+                "claim_amount": float(claim.claim_amount),
+                "policyholder": {
+                    "username": claim.policyholder.username,
+                    "email": claim.policyholder.email,
+                    "vehicle_make": claim.policyholder.vehicle_make,
+                    "vehicle_model": claim.policyholder.vehicle_model,
+                    "age_of_vehicle": claim.policyholder.age_of_vehicle
+                },
+                "risk_level": claim.risk_level,
+                "fraud_detected": claim.fraud_detected,
+                "confidence_score": float(claim.confidence_score) if claim.confidence_score else None,
+                "assigned_at": claim.assigned_at.isoformat() if claim.assigned_at else None,
+                "submitted_at": claim.submitted_at.isoformat() if claim.submitted_at else None,
+                "surveyor_notes": claim.surveyor_notes,
+                "surveyor_recommendation": claim.surveyor_recommendation,
+                "surveyor_assessed_amount": float(claim.surveyor_assessed_amount) if claim.surveyor_assessed_amount else None,
+                "damage_verified": claim.damage_verified,
+                "survey_completed_at": claim.survey_completed_at.isoformat() if claim.survey_completed_at else None,
+            }
+            assigned_claims.append(claim_data)
+        
+        logger.info(f"Successfully returning {len(assigned_claims)} claims for surveyor {request.user.username}")
+        
+        return Response({
+            "status": "success",
+            "claims": assigned_claims,
+            "count": len(assigned_claims),
+            "surveyor_user_id": request.user.id,
+            "surveyor_username": request.user.username
+        }, status=status.HTTP_200_OK)
+    
+    except UserProfile.DoesNotExist:
+        logger.error(f"UserProfile not found for user: {request.user.username}")
+        return Response(
+            {"error": "User profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error fetching surveyor claims: {str(e)}", exc_info=True)
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def surveyor_submit_report(request, claim_id):
+    """
+    Surveyor submits a field inspection report for a claim.
+    Expected JSON body:
+    {
+        "surveyor_notes": "Damage inspection report...",
+        "surveyor_recommendation": "APPROVE|REJECT|INVESTIGATE|PARTIAL",
+        "surveyor_assessed_amount": 50000.00,
+        "damage_verified": true
+    }
+    """
+    try:
+        user_profile = UserProfile.objects.get(user=request.user)
+        
+        if user_profile.role != 'surveyor':
+            return Response(
+                {"error": "User is not a surveyor"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            claim = Claim.objects.get(id=claim_id)
+        except Claim.DoesNotExist:
+            return Response(
+                {"error": f"Claim with id {claim_id} not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if this claim is assigned to this surveyor
+        if claim.assigned_surveyor != request.user:
+            return Response(
+                {"error": "This claim is not assigned to you"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Extract report data
+        surveyor_notes = request.data.get('surveyor_notes')
+        surveyor_recommendation = request.data.get('surveyor_recommendation')
+        surveyor_assessed_amount = request.data.get('surveyor_assessed_amount')
+        damage_verified = request.data.get('damage_verified')
+        
+        # Validate recommendation if provided
+        if surveyor_recommendation:
+            valid_recommendations = ['APPROVE', 'REJECT', 'INVESTIGATE', 'PARTIAL']
+            if surveyor_recommendation not in valid_recommendations:
+                return Response(
+                    {
+                        "error": f"Invalid recommendation. Must be one of: {', '.join(valid_recommendations)}",
+                        "received": surveyor_recommendation
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Update claim with survey report data
+        from django.utils import timezone
+        if surveyor_notes:
+            claim.surveyor_notes = surveyor_notes
+        if surveyor_recommendation:
+            claim.surveyor_recommendation = surveyor_recommendation
+        if surveyor_assessed_amount is not None:
+            try:
+                claim.surveyor_assessed_amount = float(surveyor_assessed_amount)
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": "surveyor_assessed_amount must be a number"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        if damage_verified is not None:
+            claim.damage_verified = damage_verified
+        
+        # Mark survey as completed
+        claim.survey_completed_at = timezone.now()
+        old_status = claim.status
+        if claim.status == 'Under Survey':
+            claim.status = 'Survey Completed'
+        
+        claim.save()
+        
+        # Log the action in claim history
+        from .models import ClaimHistory
+        ClaimHistory.objects.create(
+            claim=claim,
+            action='surveyor_report',
+            old_status=old_status,
+            new_status=claim.status,
+            notes=f"Surveyor {request.user.username} submitted inspection report. Recommendation: {surveyor_recommendation}",
+            performed_by=request.user.username
+        )
+        
+        logger.info(f"Survey report submitted for claim {claim.claim_number} by {request.user.username}")
+        
+        return Response({
+            "status": "success",
+            "message": "Survey report submitted successfully",
+            "claim_id": claim_id,
+            "claim_number": claim.claim_number,
+            "claim_status": claim.status,
+            "surveyor_notes": claim.surveyor_notes,
+            "surveyor_recommendation": claim.surveyor_recommendation,
+            "surveyor_assessed_amount": float(claim.surveyor_assessed_amount) if claim.surveyor_assessed_amount else None,
+            "damage_verified": claim.damage_verified,
+            "survey_completed_at": claim.survey_completed_at.isoformat()
+        }, status=status.HTTP_200_OK)
+    
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "User profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error submitting report: {str(e)}", exc_info=True)
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_assign_surveyor(request, claim_id):
+    """
+    Admin assigns a surveyor to a specific claim.
+    Expected JSON body: {"surveyor_id": <int>} OR {"surveyor_username": "<string>"}
+    """
+    try:
+        logger.info(f"assign_surveyor called - user: {request.user}, data: {request.data}")
+        
+        user_profile = UserProfile.objects.get(user=request.user)
+        
+        if user_profile.role != 'admin':
+            return Response(
+                {"error": "Only admins can assign surveyors", "your_role": user_profile.role},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            claim = Claim.objects.get(id=claim_id)
+        except Claim.DoesNotExist:
+            return Response(
+                {"error": f"Claim with id {claim_id} not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Try to get surveyor by ID or username
+        surveyor_id = request.data.get('surveyor_id')
+        surveyor_username = request.data.get('surveyor_username')
+        
+        logger.info(f"surveyor_id: {surveyor_id}, surveyor_username: {surveyor_username}")
+        
+        surveyor_user = None
+        
+        if surveyor_id:
+            try:
+                surveyor_id = int(surveyor_id)
+                surveyor_user = User.objects.get(id=surveyor_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": f"surveyor_id must be an integer, got: {type(surveyor_id)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except User.DoesNotExist:
+                return Response(
+                    {"error": f"User with id {surveyor_id} not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        elif surveyor_username:
+            try:
+                surveyor_user = User.objects.get(username=surveyor_username)
+            except User.DoesNotExist:
+                return Response(
+                    {"error": f"User with username '{surveyor_username}' not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        else:
+            return Response(
+                {
+                    "error": "Either surveyor_id or surveyor_username is required",
+                    "received_data": dict(request.data),
+                    "example_1": {"surveyor_id": 2},
+                    "example_2": {"surveyor_username": "john_surveyor"}
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verify the user is actually a surveyor
+        try:
+            surveyor_profile = UserProfile.objects.get(user=surveyor_user)
+            
+            if surveyor_profile.role != 'surveyor':
+                return Response(
+                    {"error": f"User '{surveyor_user.username}' is not a surveyor (role: {surveyor_profile.role})"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except UserProfile.DoesNotExist:
+            return Response(
+                {"error": f"User profile not found for {surveyor_user.username}. Please create a profile first."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Update claim with surveyor assignment
+        from django.utils import timezone
+        claim.assigned_surveyor = surveyor_user
+        claim.assigned_at = timezone.now()
+        if claim.status == 'Pending':
+            claim.status = 'Under Survey'
+        claim.save()
+        
+        logger.info(f"Claim {claim_id} assigned to surveyor {surveyor_user.username}")
+        
+        return Response({
+            "status": "success",
+            "message": "Surveyor assigned successfully",
+            "claim_id": claim_id,
+            "claim_number": claim.claim_number,
+            "surveyor": {
+                "id": surveyor_user.id,
+                "username": surveyor_user.username,
+                "email": surveyor_user.email
+            },
+            "claim_status": claim.status,
+            "assigned_at": claim.assigned_at.isoformat()
+        }, status=status.HTTP_200_OK)
+    
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "Your user profile not found. Please contact admin."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error assigning surveyor: {str(e)}", exc_info=True)
+        return Response(
+            {"error": f"Internal error: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_surveyors(request):
+    """
+    Get list of all surveyors (for admin use).
+    """
+    try:
+        user_profile = UserProfile.objects.get(user=request.user)
+        
+        if user_profile.role != 'admin':
+            return Response(
+                {"error": "Only admins can list surveyors"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Query all surveyor users
+        surveyors = UserProfile.objects.filter(role='surveyor')
+        
+        surveyor_list = []
+        for surveyor in surveyors:
+            surveyor_list.append({
+                "id": surveyor.user.id,
+                "username": surveyor.user.username,
+                "email": surveyor.user.email,
+                "first_name": surveyor.user.first_name,
+                "last_name": surveyor.user.last_name,
+                "role": surveyor.role,
+                "phone": surveyor.phone if hasattr(surveyor, 'phone') else None
+            })
+        
+        return Response({
+            "status": "success",
+            "surveyors": surveyor_list,
+            "count": len(surveyor_list)
+        }, status=status.HTTP_200_OK)
+    
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "User profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error listing surveyors: {str(e)}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_surveyor(request):
+    """
+    Admin creates a new surveyor account.
+    """
+    try:
+        user_profile = UserProfile.objects.get(user=request.user)
+        
+        if user_profile.role != 'admin':
+            return Response(
+                {"error": "Only admins can create surveyors"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Extract data
+        username = request.data.get('username')
+        email = request.data.get('email')
+        password = request.data.get('password')
+        first_name = request.data.get('first_name', '')
+        last_name = request.data.get('last_name', '')
+        phone = request.data.get('phone', '')
+        
+        # Validate
+        if not all([username, email, password]):
+            return Response(
+                {"error": "username, email, and password are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if user exists
+        if User.objects.filter(username=username).exists():
+            return Response(
+                {"error": "Username already exists"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if User.objects.filter(email=email).exists():
+            return Response(
+                {"error": "Email already exists"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create user and profile
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            first_name=first_name,
+            last_name=last_name
+        )
+        
+        surveyor_profile = UserProfile.objects.create(
+            user=user,
+            role='surveyor',
+            phone=phone
+        )
+        
+        return Response({
+            "status": "success",
+            "message": "Surveyor created successfully",
+            "surveyor": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "role": "surveyor"
+            }
+        }, status=status.HTTP_201_CREATED)
+    
+    except UserProfile.DoesNotExist:
+        return Response(
+            {"error": "User profile not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error creating surveyor: {str(e)}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
