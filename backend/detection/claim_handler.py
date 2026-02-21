@@ -467,6 +467,19 @@ class ClaimDatabaseHandler:
         # Admin info
             'reviewed_by': claim.reviewed_by,
             'admin_notes': claim.admin_notes,
+            'rejection_reason': claim.rejection_reason,
+        
+        # Surveyor info
+            'assigned_surveyor': claim.assigned_surveyor.username if claim.assigned_surveyor else None,
+            'assigned_surveyor_name': claim.assigned_surveyor.username if claim.assigned_surveyor else None,
+            'assigned_at': claim.assigned_at.isoformat() if claim.assigned_at else None,
+            'surveyor_notes': claim.surveyor_notes,
+            'surveyor_recommendation': claim.surveyor_recommendation,
+            'surveyor_assessed_amount': float(claim.surveyor_assessed_amount) if claim.surveyor_assessed_amount else None,
+            'damage_verified': claim.damage_verified,
+            'survey_completed_at': claim.survey_completed_at.isoformat() if claim.survey_completed_at else None,
+            'is_assigned_to_surveyor': claim.assigned_surveyor is not None,
+            'final_claim_amount': float(claim.surveyor_assessed_amount or claim.claim_amount),
         
         # Complete analysis
             'detailed_analysis': claim.detailed_analysis,
@@ -498,6 +511,18 @@ class ClaimDatabaseHandler:
                 images_data.append(img_data)
         
             data['images'] = images_data
+    
+    # Include field photos if requested
+        if include_images:
+            field_photos_data = []
+            for field_photo in claim.field_photos.all():
+                field_photos_data.append({
+                    'photo_url': field_photo.photo.url if field_photo.photo else None,
+                    'caption': field_photo.caption,
+                    'uploaded_by': field_photo.uploaded_by.username if field_photo.uploaded_by else None,
+                    'uploaded_at': field_photo.uploaded_at.isoformat()
+                })
+            data['field_photos'] = field_photos_data
     
     # Include history if requested
         if include_history:

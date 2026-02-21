@@ -525,3 +525,61 @@ def claim_api_info(request):
         'authentication': 'JWT Token required (except /info/)',
         'note': 'Most endpoints require IsAuthenticated permission'
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_under_survey_claims(request):
+    """
+    Get all claims that are currently under survey.
+    """
+    try:
+        # Query claims with status 'Under Survey' or similar
+        # TODO: Update the query based on your actual claim status values
+        claims = Claim.objects.filter(status__iexact='under survey')
+        
+        # Serialize claims
+        claims_data = [
+            ClaimDatabaseHandler.serialize_claim(claim, include_images=False, include_history=False)
+            for claim in claims
+        ]
+        
+        return Response({
+            'status': 'success',
+            'count': len(claims_data),
+            'claims': claims_data
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_survey_completed_claims(request):
+    """
+    Get all claims that have completed survey.
+    """
+    try:
+        # Query claims with status 'Survey Completed' or similar
+        # TODO: Update the query based on your actual claim status values
+        claims = Claim.objects.filter(status__iexact='survey completed')
+        
+        # Serialize claims
+        claims_data = [
+            ClaimDatabaseHandler.serialize_claim(claim, include_images=False, include_history=False)
+            for claim in claims
+        ]
+        
+        return Response({
+            'status': 'success',
+            'count': len(claims_data),
+            'claims': claims_data
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
