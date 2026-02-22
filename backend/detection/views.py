@@ -38,15 +38,6 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 
 
-
-from .verification_apis import verify_dl, verify_rto, verify_fir, aggregate_verification
-from .verification_apis import (
-    verify_police_report,
-    verify_vehicle_registration,
-    verify_driving_license
-)
-from decouple import config
-
 # Import ML libraries
 try:
     import joblib
@@ -1337,13 +1328,15 @@ def get_detailed_image_predictions(image_path, image_model, device):
         }
 
 
-def process_multiple_images(image_paths, image_model, device):
-    """Process multiple images and aggregate results"""
-    all_image_details = []
-    all_damage_info = []
-    
-    for idx, image_path in enumerate(image_paths):
-        print(f"📸 Processing image {idx + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
+def calculate_detailed_fusion(tabular_details, image_details,
+                              dl_number=None, expiry_date=None,
+                              reg_no=None, make=None, year=None,
+                              fir_no=None):
+    """Calculate fusion with detailed mathematical breakdown + verification layer"""
+    try:
+        # === BASE MODEL PROBABILITIES ===
+        tabular_fraud_prob = tabular_details.get('ensemble_probabilities', {}).get('fraud', 0.4)
+        tabular_confidence = tabular_details.get('tabular_confidence', 0.6)
         
         # Get predictions for this image
         image_details = get_detailed_image_predictions(image_path, image_model, device)
@@ -1351,544 +1344,52 @@ def process_multiple_images(image_paths, image_model, device):
         image_details['image_filename'] = os.path.basename(image_path)
         all_image_details.append(image_details)
         
-        # Get damage detection visualization
-        if image_model is not None:
-            damage_info = process_damage_detection_image(image_path, image_model, device)
-            if damage_info:
-                damage_info['image_index'] = idx + 1
-                damage_info['image_filename'] = os.path.basename(image_path)
-                all_damage_info.append(damage_info)
-    
-    # Aggregate results across all images
-    aggregated_results = aggregate_multi_image_results(all_image_details)
-    
-    return {
-        'individual_image_results': all_image_details,
-        'individual_damage_detections': all_damage_info,
-        'aggregated_results': aggregated_results,
-        'total_images_processed': len(image_paths)
-    }
-
-
-def aggregate_multi_image_results(all_image_details):
-    """Aggregate predictions from multiple images into a single confidence score"""
-    if not all_image_details:
-        return {
-            'aggregation_method': 'none',
-            'final_image_fraud_probability': 0.3,
-            'final_image_confidence': 0.5
-        }
-    
-    # Extract key metrics from each image
-    fraud_probs = [img['image_fraud_probability'] for img in all_image_details]
-    confidences = [img['image_confidence'] for img in all_image_details]
-    damage_percentages = [img['damage_analysis']['damage_percentage'] for img in all_image_details]
-    severity_scores = [img['damage_analysis']['severity_score'] for img in all_image_details]
-    
-    # Method 1: Weighted average (higher confidence = higher weight)
-    total_confidence = sum(confidences)
-    if total_confidence > 0:
-        weighted_fraud_prob = sum(fp * conf for fp, conf in zip(fraud_probs, confidences)) / total_confidence
-    else:
-        weighted_fraud_prob = np.mean(fraud_probs)
-    
-    # Method 2: Maximum fraud probability (most suspicious image)
-    max_fraud_prob = max(fraud_probs)
-    max_fraud_idx = fraud_probs.index(max_fraud_prob)
-    
-    # Method 3: Average of top 2 most suspicious images
-    sorted_probs = sorted(fraud_probs, reverse=True)
-    top_k = min(2, len(sorted_probs))
-    top_k_avg = np.mean(sorted_probs[:top_k])
-    
-    # Method 4: Damage-weighted average
-    total_damage = sum(damage_percentages)
-    if total_damage > 0:
-        damage_weighted_prob = sum(
-            fp * dp for fp, dp in zip(fraud_probs, damage_percentages)
-        ) / total_damage
-    else:
-        damage_weighted_prob = np.mean(fraud_probs)
-    
-    # Final aggregation: Combine methods with tuned weights
-    # Prioritize the most suspicious images while considering overall pattern
-    final_fraud_probability = (
-        0.35 * max_fraud_prob +           # Highest single image
-        0.25 * weighted_fraud_prob +       # Confidence-weighted average
-        0.25 * top_k_avg +                 # Average of top suspicious images
-        0.15 * damage_weighted_prob        # Damage-based weighting
-    )
-    
-    # Calculate final confidence based on consistency across images
-    fraud_prob_std = np.std(fraud_probs)
-    confidence_consistency = 1.0 - min(fraud_prob_std / 0.5, 1.0)  # Lower std = higher consistency
-    final_confidence = (np.mean(confidences) + confidence_consistency) / 2
-    
-    # Determine overall severity
-    avg_damage_percentage = np.mean(damage_percentages)
-    max_damage_percentage = max(damage_percentages)
-    
-    if max_damage_percentage > 15 or avg_damage_percentage > 10:
-        overall_severity = "HIGH"
-    elif max_damage_percentage > 5 or avg_damage_percentage > 3:
-        overall_severity = "MEDIUM"
-    else:
-        overall_severity = "LOW"
-    
-    return {
-        'aggregation_method': 'multi_method_ensemble',
-        'total_images': len(all_image_details),
-        
-        'fraud_probability_distribution': {
-            'min': float(min(fraud_probs)),
-            'max': float(max(fraud_probs)),
-            'mean': float(np.mean(fraud_probs)),
-            'median': float(np.median(fraud_probs)),
-            'std': float(fraud_prob_std)
-        },
-        
-        'aggregation_components': {
-            'max_fraud_probability': float(max_fraud_prob),
-            'max_fraud_image_index': max_fraud_idx + 1,
-            'weighted_average': float(weighted_fraud_prob),
-            'top_k_average': float(top_k_avg),
-            'damage_weighted': float(damage_weighted_prob)
-        },
-        
-        'damage_summary': {
-            'avg_damage_percentage': float(avg_damage_percentage),
-            'max_damage_percentage': float(max_damage_percentage),
-            'min_damage_percentage': float(min(damage_percentages)),
-            'total_detections_all_images': sum(img['detection_results']['high_confidence_detections'] for img in all_image_details)
-        },
-        
-        'severity_analysis': {
-            'overall_severity': overall_severity,
-            'avg_severity_score': float(np.mean(severity_scores)),
-            'max_severity_score': float(max(severity_scores)),
-            'severity_levels': [img['damage_analysis']['severity_level'] for img in all_image_details]
-        },
-        
-        'confidence_metrics': {
-            'avg_confidence': float(np.mean(confidences)),
-            'confidence_consistency': float(confidence_consistency),
-            'final_confidence': float(final_confidence)
-        },
-        
-        # Final outputs for fusion
-        'final_image_fraud_probability': float(final_fraud_probability),
-        'final_image_confidence': float(final_confidence),
-        
-        'recommendation': {
-            'consistency': 'HIGH' if fraud_prob_std < 0.1 else 'MEDIUM' if fraud_prob_std < 0.2 else 'LOW',
-            'most_suspicious_image': max_fraud_idx + 1,
-            'images_requiring_attention': [i + 1 for i, fp in enumerate(fraud_probs) if fp > 0.6]
-        }
-    }
-
-##############################################
-##############################################
-
-# ============================================================================
-# YOLO INTEGRATION FUNCTIONS - PART 2
-# ============================================================================
-
-def process_yolo_detection_complete(image_path, yolo_parts_model, yolo_damage_model):
-    """Process single image with YOLO models to detect parts and damages"""
-    try:
-        results = {
-            'parts_detected': [],
-            'damages_detected': [],
-            'assignments': [],
-            'detection_successful': False
-        }
-        
-        # Detect car parts
-        if yolo_parts_model is not None:
-            parts_results = yolo_parts_model(image_path)[0]
-            
-            for box in parts_results.boxes:
-                cls_id = int(box.cls)
-                part_name = yolo_parts_model.names[cls_id]
-                confidence = float(box.conf)
-                bbox = box.xyxy[0].tolist()
-                
-                results['parts_detected'].append({
-                    'name': part_name,
-                    'confidence': confidence,
-                    'bbox': bbox,
-                    'center': ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-                })
-        
-        # Detect damages
-        if yolo_damage_model is not None:
-            damage_results = yolo_damage_model(image_path)[0]
-            
-            for box in damage_results.boxes:
-                cls_id = int(box.cls)
-                damage_name = yolo_damage_model.names[cls_id]
-                confidence = float(box.conf)
-                bbox = box.xyxy[0].tolist()
-                
-                results['damages_detected'].append({
-                    'name': damage_name,
-                    'confidence': confidence,
-                    'bbox': bbox,
-                    'center': ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-                })
-        
-        # Assign damages to parts (spatial matching)
-        for damage in results['damages_detected']:
-            dmg_center = damage['center']
-            assigned_part = None
-            max_overlap = 0
-            
-            for part in results['parts_detected']:
-                x1, y1, x2, y2 = part['bbox']
-                
-                # Check if damage center is inside part bbox
-                if x1 <= dmg_center[0] <= x2 and y1 <= dmg_center[1] <= y2:
-                    # Calculate overlap area
-                    overlap_area = (x2 - x1) * (y2 - y1)
-                    if overlap_area > max_overlap:
-                        max_overlap = overlap_area
-                        assigned_part = part['name']
-            
-            results['assignments'].append({
-                'damage_type': damage['name'],
-                'damage_confidence': damage['confidence'],
-                'assigned_part': assigned_part,
-                'damage_bbox': damage['bbox']
-            })
-        
-        results['detection_successful'] = True
-        return results
-        
-    except Exception as e:
-        print(f"❌ YOLO detection failed: {e}")
-        return {
-            'parts_detected': [],
-            'damages_detected': [],
-            'assignments': [],
-            'detection_successful': False,
-            'error': str(e)
-        }
-
-
-
-# ============================================================================
-# FINAL FIX: Replace the import line in calculate_claim_amount_from_yolo_deduplicated
-# ============================================================================
-
-def calculate_claim_amount_from_yolo_deduplicated(
-    yolo_results_all_images,
-    vehicle_make,
-    vehicle_model,
-    cnn_damage_percentage,
-    enable_deduplication=True,
-    confidence_threshold=0.5
-):
-    """
-    Calculate claim amount based on YOLO detections with duplicate removal
-    """
-    # ========================================================================
-    # REMOVE THIS LINE (it's causing the error):
-    # from .pricing_utils import get_part_price_from_db, get_damage_severity_multiplier_from_db
-    # ========================================================================
-    
-    # Instead, use the functions already in views.py
-    try:
-        # Step 1: Deduplicate detections
-        if enable_deduplication:
-            deduplicated_results, dedup_stats = deduplicate_detections(
-                yolo_results_all_images,
-                confidence_threshold
-            )
-            logger.info(f"Deduplication: {dedup_stats['total_detections']} → {dedup_stats['after_deduplication']} detections")
+        # === CALCULATE WEIGHTS ===
+        total_confidence = tabular_confidence + image_confidence
+        if total_confidence > 0:
+            tabular_weight = tabular_confidence / total_confidence
+            image_weight = image_confidence / total_confidence
         else:
-            deduplicated_results = yolo_results_all_images
-            dedup_stats = {
-                'deduplication_enabled': False,
-                'total_detections': sum(len(r.get('assignments', [])) for r in yolo_results_all_images)
-            }
-        
-        # Step 2: Calculate claim amount
-        total_base_amount = 0
-        detailed_breakdown = []
-        pricing_sources = {'database': 0, 'fallback': 0, 'average': 0}
-        
-        for img_idx, yolo_result in enumerate(deduplicated_results):
-            if not yolo_result.get('detection_successful', False):
-                continue
-            
-            assignments = yolo_result.get('assignments', [])
-            
-            for assignment in assignments:
-                damage_type = assignment['damage_type']
-                assigned_part = assignment.get('assigned_part')
-                confidence = assignment.get('damage_confidence', 0)
-                
-                if assigned_part and assigned_part != 'UNASSIGNED':
-                    # Get part price (use functions in views.py, NOT from pricing_utils)
-                    part_price = get_part_price(vehicle_make, vehicle_model, assigned_part)
-                    
-                    # Get damage severity multiplier
-                    severity_multiplier = get_damage_severity_multiplier(damage_type)
-                    
-                    # Calculate damage cost
-                    damage_cost = part_price * severity_multiplier
-                    total_base_amount += damage_cost
-                    
-                    detailed_breakdown.append({
-                        'image_index': img_idx + 1,
-                        'part': assigned_part,
-                        'damage_type': damage_type,
-                        'part_price': float(part_price),
-                        'severity_multiplier': float(severity_multiplier),
-                        'damage_cost': float(damage_cost),
-                        'confidence': float(confidence),
-                        'price_source': 'fallback',  # We're using hardcoded prices for now
-                        'damage_source': 'fallback'
-                    })
-        
-        # Step 3: Validate breakdown
-        validation = validate_claim_breakdown(detailed_breakdown)
-        
-        if not validation['is_valid']:
-            logger.warning(f"Claim validation warnings: {validation['warnings']}")
-        
-        # Step 4: Apply CNN damage percentage multiplier
-        cnn_multiplier = 1 + (cnn_damage_percentage / 100)
-        final_claim_amount = total_base_amount * cnn_multiplier
-        
-        # Round to nearest 100
-        final_claim_amount = round(final_claim_amount / 100) * 100
-        
-        return {
-            'yolo_base_amount': float(total_base_amount),
-            'cnn_damage_percentage': float(cnn_damage_percentage),
-            'cnn_multiplier': float(cnn_multiplier),
-            'final_calculated_amount': float(final_claim_amount),
-            'detailed_breakdown': detailed_breakdown,
-            'total_damaged_parts': len(detailed_breakdown),
-            'unique_parts_damaged': len(set(item['part'] for item in detailed_breakdown)),
-            'calculation_formula': f'Base(₹{total_base_amount:.2f}) × CNN_Multiplier({cnn_multiplier:.2f}) = ₹{final_claim_amount:.2f}',
-            'pricing_sources_used': pricing_sources,
-            'deduplication_stats': dedup_stats,
-            'validation': validation,
-            'deduplication_enabled': enable_deduplication,
-            'confidence_threshold': confidence_threshold
-        }
-        
-    except Exception as e:
-        logger.error(f"Claim amount calculation failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            'yolo_base_amount': 0,
-            'cnn_damage_percentage': 0,
-            'cnn_multiplier': 1.0,
-            'final_calculated_amount': 0,
-            'detailed_breakdown': [],
-            'total_damaged_parts': 0,
-            'unique_parts_damaged': 0,
-            'deduplication_stats': {},
-            'error': str(e)
-        }
-
-
-
-def format_claim_breakdown_for_display(breakdown, group_by_image=True):
-    """
-    Format claim breakdown for clean frontend display
-    Groups by image and removes duplicates visually
-    """
-    if not breakdown:
-        return []
-    
-    if group_by_image:
-        # Group by image
-        images = defaultdict(list)
-        for item in breakdown:
-            images[item['image_index']].append(item)
-        
-        formatted = []
-        for img_idx in sorted(images.keys()):
-            items = images[img_idx]
-            formatted.append({
-                'image_index': img_idx,
-                'damages': items,
-                'image_total': sum(item['damage_cost'] for item in items),
-                'parts_count': len(set(item['part'] for item in items))
-            })
-        
-        return formatted
-    else:
-        # Flat list
-        return breakdown
-
-
-def get_deduplication_summary(dedup_stats):
-    """
-    Generate human-readable deduplication summary
-    """
-    if not dedup_stats or not dedup_stats.get('deduplication_enabled', True):
-        return "Deduplication was not applied"
-    
-    total = dedup_stats.get('total_detections', 0)
-    after = dedup_stats.get('after_deduplication', 0)
-    removed_dupes = dedup_stats.get('removed_duplicates', 0)
-    removed_low_conf = dedup_stats.get('removed_low_confidence', 0)
-    
-    if total == 0:
-        return "No detections to deduplicate"
-    
-    summary = f"Processed {total} detections:\n"
-    summary += f"  • Removed {removed_dupes} duplicate part detections\n"
-    summary += f"  • Removed {removed_low_conf} low-confidence detections\n"
-    summary += f"  • Final: {after} unique damages\n"
-    
-    if removed_dupes + removed_low_conf > 0:
-        savings_pct = ((removed_dupes + removed_low_conf) / total * 100) if total > 0 else 0
-        summary += f"  • Prevented {savings_pct:.1f}% claim inflation"
-    
-    return summary
-
-def process_multiple_images_with_yolo(image_paths, yolo_parts_model, yolo_damage_model, cnn_image_model, device):
-    """
-    Process multiple images with YOLO + CNN
-    Returns:
-    - YOLO detections for all images
-    - CNN damage analysis for all images
-    - Aggregated CNN results
-    """
-    yolo_results_all = []
-    cnn_results_all = []
-    cnn_damage_detections = []
-    
-    for idx, image_path in enumerate(image_paths):
-        print(f"📸 Processing image {idx + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
-        
-        # YOLO detection
-        yolo_result = process_yolo_detection_complete(image_path, yolo_parts_model, yolo_damage_model)
-        yolo_result['image_index'] = idx + 1
-        yolo_result['image_filename'] = os.path.basename(image_path)
-        yolo_results_all.append(yolo_result)
-        
-        # CNN damage percentage analysis
-        cnn_result = get_detailed_image_predictions(image_path, cnn_image_model, device)
-        cnn_result['image_index'] = idx + 1
-        cnn_result['image_filename'] = os.path.basename(image_path)
-        cnn_results_all.append(cnn_result)
-        
-        # CNN damage visualization
-        if cnn_image_model is not None:
-            damage_viz = process_damage_detection_image(image_path, cnn_image_model, device)
-            if damage_viz:
-                damage_viz['image_index'] = idx + 1
-                damage_viz['image_filename'] = os.path.basename(image_path)
-                cnn_damage_detections.append(damage_viz)
-        else:
-            # Fallback: Create simple visualization when CNN model not available
-            print(f"⚠️  CNN model not available, using fallback visualization for image {idx + 1}")
-            fallback_viz = create_simple_damage_visualization(image_path)
-            if fallback_viz:
-                fallback_viz['image_index'] = idx + 1
-                fallback_viz['image_filename'] = os.path.basename(image_path)
-                cnn_damage_detections.append(fallback_viz)
-    
-    # Aggregate CNN results
-    cnn_aggregated = aggregate_multi_image_results(cnn_results_all)
-    
-    return {
-        'yolo_results_all_images': yolo_results_all,
-        'cnn_results_all_images': cnn_results_all,
-        'cnn_aggregated_results': cnn_aggregated,
-        'cnn_damage_visualizations': cnn_damage_detections,
-        'total_images_processed': len(image_paths)
-    }
-
-##############################################
-##############################################
-
-
-
-
-def calculate_detailed_fusion_with_yolo(
-    tabular_details,
-    cnn_aggregated_results,
-    yolo_claim_calculation,
-    dl_number=None,
-    expiry_date=None,
-    reg_no=None,
-    make=None,
-    year=None,
-    fir_no=None
-):
-    """
-    NEW FUSION MODEL:
-    - Tabular fraud probability (from XGBoost)
-    - CNN damage percentage (fraud indicator)
-    - YOLO calculated claim amount
-    - Document verification (info only)
-    
-    Logic:
-    1. Base fraud score = weighted avg of tabular + CNN fraud probability
-    2. Claim amount validation = Compare YOLO calculated vs user entered (if provided)
-    3. Final score = base + claim_mismatch_boost
-    """
-    try:
-        # === BASE MODEL PROBABILITIES ===
-        tabular_fraud_prob = tabular_details.get("probabilities", {}).get("fraud", 0.4)
-        tabular_confidence = tabular_details.get("primary_prediction", {}).get("confidence", 0.6)
-        
-        cnn_fraud_prob = cnn_aggregated_results.get("final_image_fraud_probability", 0.3)
-        cnn_confidence = cnn_aggregated_results.get("final_image_confidence", 0.7)
-        cnn_damage_percentage = cnn_aggregated_results.get("damage_summary", {}).get("avg_damage_percentage", 0)
-        
-        # === MODEL WEIGHTS ===
-        total_confidence = tabular_confidence + cnn_confidence
-        tabular_weight = tabular_confidence / total_confidence if total_confidence > 0 else 0.4
-        cnn_weight = cnn_confidence / total_confidence if total_confidence > 0 else 0.6
+            tabular_weight = 0.5
+            image_weight = 0.5
         
         # === FUSION METHODS ===
         weighted_fusion = (tabular_weight * tabular_fraud_prob) + (cnn_weight * cnn_fraud_prob)
         geometric_fusion = np.sqrt(max(tabular_fraud_prob * cnn_fraud_prob, 0))
         base_fusion_score = (0.65 * weighted_fusion) + (0.35 * geometric_fusion)
         
-        # === YOLO CLAIM AMOUNT ANALYSIS ===
-        calculated_amount = yolo_claim_calculation.get('final_calculated_amount', 0)
-        yolo_base = yolo_claim_calculation.get('yolo_base_amount', 0)
+        # === BASE FINAL FUSION ===
+        alpha = 0.6
+        beta = 0.4
+        base_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
         
-        claim_amount_info = {
-            'yolo_calculated_amount': float(calculated_amount),
-            'yolo_base_amount': float(yolo_base),
-            'cnn_damage_multiplier': float(yolo_claim_calculation.get('cnn_multiplier', 1.0)),
-            'total_parts_damaged': yolo_claim_calculation.get('total_damaged_parts', 0),
-            'breakdown': yolo_claim_calculation.get('detailed_breakdown', [])
-        }
-        
-        # === DOCUMENT VERIFICATION (INFO ONLY) ===
+        # ===================================================================
+        # 🔐 VERIFICATION INTEGRATION (DL / RTO / FIR)
+        # ===================================================================
         dl_info = verify_dl(dl_number, expiry_date)
         rto_info = verify_rto(reg_no, make, year)
         fir_info = verify_fir(fir_no)
+
         verification_reliability = aggregate_verification(dl_info, rto_info, fir_info)
-        
-        # === FINAL FUSION SCORE ===
-        final_fusion_score = base_fusion_score
-        final_fusion_score = max(0.0, min(final_fusion_score, 0.99))
-        
+        # lower reliability → higher fraud likelihood
+        verification_impact = (1 - verification_reliability)
+
+        # Weighted merge with verification reliability
+        gamma = 0.25  # how much verification affects fusion
+        final_fusion_score = ((1 - gamma) * base_fusion_score) + (gamma * verification_impact)
+
         # === DECISION ===
         fraud_threshold = 0.5
         final_prediction = 1 if final_fusion_score > fraud_threshold else 0
         
+        # === RETURN STRUCTURE ===
         return {
-            "input_probabilities": {
-                "tabular_fraud_probability": float(tabular_fraud_prob),
-                "tabular_confidence": float(tabular_confidence),
-                "cnn_fraud_probability": float(cnn_fraud_prob),
-                "cnn_confidence": float(cnn_confidence),
-                "verification_reliability": float(verification_reliability)
+            'input_probabilities': {
+                'tabular_fraud_probability': float(tabular_fraud_prob),
+                'tabular_confidence': float(tabular_confidence),
+                'image_fraud_probability': float(image_fraud_prob),
+                'image_confidence': float(image_confidence),
+                'verification_reliability': float(verification_reliability)
             },
             "weight_calculation": {
                 "total_confidence": float(total_confidence),
@@ -1904,17 +1405,21 @@ def calculate_detailed_fusion_with_yolo(
                     "score": float(geometric_fusion)
                 }
             },
-            "yolo_claim_calculation": claim_amount_info,
-            "cnn_damage_analysis": {
-                "damage_percentage": float(cnn_damage_percentage),
-                "severity_level": cnn_aggregated_results.get("severity_analysis", {}).get("overall_severity", "LOW")
+            'verification_details': {
+                'dl': dl_info,
+                'rto': rto_info,
+                'fir': fir_info,
+                'combined_reliability': float(verification_reliability)
             },
-            "verification_details": {
-                "dl": dl_info,
-                "rto": rto_info,
-                "fir": fir_info,
-                "combined_reliability": float(verification_reliability),
-                "note": "⚠️ Verification is for information only - NOT scored into fraud detection"
+            'final_fusion': {
+                'alpha': float(alpha),
+                'beta': float(beta),
+                'gamma': float(gamma),
+                'calculation': f"(({1 - gamma} × base_fusion) + ({gamma} × (1−reliability)))",
+                'base_fusion': float(base_fusion_score),
+                'final_score': float(final_fusion_score),
+                'threshold': float(fraud_threshold),
+                'prediction': int(final_prediction)
             },
             "final_fusion": {
                 "base_fusion": float(base_fusion_score),
@@ -1939,14 +1444,28 @@ def calculate_detailed_fusion_with_yolo(
                 "cnn_fraud_probability": 0.3,
                 "cnn_confidence": 0.7
             },
-            "yolo_claim_calculation": {
-                'yolo_calculated_amount': 0,
-                'total_parts_damaged': 0
+            "weight_calculation": {
+                "total_confidence": 1.3,
+                "tabular_weight": 0.46,
+                "image_weight": 0.54
             },
-            "final_fusion": {
-                "base_fusion": 0.35,
-                "final_score": 0.35,
-                "prediction": 0
+            "fusion_methods": {
+                "weighted_average": {"score": 0.35},
+                "geometric_mean": {"score": 0.32}
+            },
+            'verification_details': {
+                'dl': {'valid': False, 'dl_score': 0.4},
+                'rto': {'valid': False, 'rto_score': 0.4},
+                'fir': {'exists': False, 'fir_score': 0.3},
+                'combined_reliability': 0.37
+            },
+            'final_fusion': {
+                'alpha': 0.6,
+                'beta': 0.4,
+                'gamma': 0.25,
+                'final_score': 0.348,
+                'threshold': 0.5,
+                'prediction': 0
             },
             "final_prediction": 0,
             "final_confidence": 0.35
