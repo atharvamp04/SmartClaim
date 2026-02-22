@@ -583,3 +583,109 @@ def get_survey_completed_claims(request):
         return Response({
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================
+# NEW: Claim Timeline Endpoint
+# ============================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_claim_timeline(request, claim_id):
+    """
+    Get claim timeline for visual step-by-step progress tracker.
+    
+    Returns timeline steps: Submitted → AI Analysis → Under Review → Field Survey → Decision
+    Each step includes date/time and who performed it.
+    
+    Endpoint: GET /api/detection/claims/<claim_id>/timeline/
+    """
+    try:
+        from .models import ClaimHistory
+        from .serializers import ClaimTimelineSerializer
+        
+        # Get claim
+        claim = Claim.objects.get(id=claim_id)
+        
+        # Check if user has permission to view this claim
+        # (must be the policyholder or admin)
+        user = request.user
+        if not user.is_superuser and claim.policyholder.username != user.username:
+            return Response(
+                {'error': 'Permission denied. You can only view your own claims.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get claim history
+        history = ClaimHistory.objects.filter(claim=claim).order_by('timestamp')
+        
+        # Build timeline steps
+        timeline_steps = []
+        
+        # Define the flow of steps
+        step_flow = [
+            ('submitted', 'Submitted'),
+            ('analyzed', 'AI Analysis'),
+            ('reviewed', 'Under Review'),
+            ('surveyor_assigned', 'Field Survey'),
+            ('survey_completed', 'Decision'),
+        ]
+        
+        # Track which steps have been completed
+        completed_actions = set()
+        for h in history:
+            completed_actions.add(h.action)
+        
+        # Map history events to timeline steps
+        history_by_action = {}
+        for h in history:
+            if h.action not in history_by_action or h.timestamp > history_by_action[h.action].timestamp:
+                history_by_action[h.action] = h
+        
+        # Build timeline with all steps
+        for action, step_name in step_flow:
+            is_completed = action in completed_actions
+            
+            if action in history_by_action:
+                h = history_by_action[action]
+                timeline_steps.append({
+                    'step': step_name,
+                    'status': h.new_status or claim.status,
+                    'timestamp': h.timestamp,
+                    'performed_by': h.performed_by,
+                    'notes': h.notes or '',
+                    'is_completed': True,
+                })
+            else:
+                # Step not yet completed
+                timeline_steps.append({
+                    'step': step_name,
+                    'status': claim.status,
+                    'timestamp': None,
+                    'performed_by': '',
+                    'notes': 'Pending',
+                    'is_completed': False,
+                })
+        
+        # Prepare response
+        timeline_data = {
+            'claim_id': claim.id,
+            'claim_number': claim.claim_number,
+            'current_status': claim.status,
+            'submitted_at': claim.submitted_at,
+            'timeline_steps': timeline_steps,
+        }
+        
+        serializer = ClaimTimelineSerializer(timeline_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Claim.DoesNotExist:
+        return Response(
+            {'error': 'Claim not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

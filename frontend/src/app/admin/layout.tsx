@@ -9,7 +9,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         "--sidebar-width": "16rem",
       } as React.CSSProperties}
     >
-      <div className="flex min-h-screen w-full bg-gray-50">
+      <div className="flex min-h-screen w-full bg-background">
         {children}
       </div>
     </SidebarProvider>

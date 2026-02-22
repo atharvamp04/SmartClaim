@@ -13,6 +13,7 @@ import {
   SidebarFooter,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { Button } from "@/components/ui/button"
 import { ClipboardList, Home, CheckCircle2, LogOut } from "lucide-react"
 import Link from "next/link"
 
@@ -65,9 +66,10 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
-              <button className="flex items-center gap-2 text-red-500 hover:text-red-600">
-                <LogOut size={18} /> Logout
-              </button>
+              <Button variant="ghost" className="text-red-600 hover:text-red-700 hover:bg-red-50 w-full justify-start">
+                <LogOut size={18} />
+                <span>Logout</span>
+              </Button>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
