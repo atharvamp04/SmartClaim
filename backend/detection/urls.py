@@ -43,6 +43,7 @@ from .claim_views import (
 
     # Claim History & Statistics
     get_claim_history,
+    get_claim_timeline,
     get_claim_statistics,
     get_policyholder_claims,
 
@@ -109,6 +110,7 @@ urlpatterns = [
     # CLAIM HISTORY & STATISTICS
     # ==========================================
     path('claims/<int:claim_id>/history/', get_claim_history, name='get-claim-history'),
+    path('claims/<int:claim_id>/timeline/', get_claim_timeline, name='get-claim-timeline'),
     path('claims/statistics/', get_claim_statistics, name='get-claim-statistics'),
     path('claims/policyholder/<str:username>/', get_policyholder_claims, name='get-policyholder-claims'),
 

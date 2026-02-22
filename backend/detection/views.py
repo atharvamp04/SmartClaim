@@ -1169,6 +1169,62 @@ def process_damage_detection_image(image_path, image_model, device):
         return None
 
 
+def create_simple_damage_visualization(image_path):
+    """
+    Fallback: Create simple damage visualization when CNN model not available
+    Returns a basic annotated image showing it's a damage assessment
+    """
+    try:
+        image = Image.open(image_path).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        
+        # Add watermark indicating this is damage assessment
+        try:
+            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        except:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
+        # Add semi-transparent overlay
+        overlay = Image.new('RGBA', image.size, (0, 0, 0, 20))
+        image = Image.alpha_composite(image.convert('RGBA'), overlay).convert('RGB')
+        draw = ImageDraw.Draw(image)
+        
+        # Add text
+        text = "DAMAGE ASSESSMENT IMAGE"
+        text_bbox = draw.textbbox((10, 10), text, font=font_large)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_x = (image.width - text_width) // 2
+        
+        draw.text((text_x, 20), text, fill=(255, 69, 0), font=font_large)
+        draw.text((image.width - 300, image.height - 40), 
+                 "CNN Model Unavailable - YOLO Analysis Only", 
+                 fill=(255, 165, 0), font=font_small)
+        
+        # Convert to base64
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=90)
+        img_base64 = base64.b64encode(buffer.getvalue()).decode()
+        
+        return {
+            'annotated_image_base64': img_base64,
+            'damage_areas': [],
+            'total_damage_areas': 0,
+            'damage_percentage': 0.0,
+            'severity': 'UNKNOWN',
+            'original_dimensions': {
+                'width': Image.open(image_path).width,
+                'height': Image.open(image_path).height
+            },
+            'average_confidence': 0.0,
+            'note': 'Simple visualization - CNN model not available'
+        }
+    except Exception as e:
+        print(f"Simple visualization fallback failed: {e}")
+        return None
+
+
 def get_detailed_image_predictions(image_path, image_model, device):
     """Get detailed image predictions with damage analysis for a single image"""
     try:

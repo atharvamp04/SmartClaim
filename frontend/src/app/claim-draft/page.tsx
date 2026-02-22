@@ -3,11 +3,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { AlertTriangle, Loader2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 
 
@@ -111,8 +114,8 @@ export default function ClaimDraftPage() {
     <div className="max-w-4xl mx-auto p-8">
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl">📸 Submit Accident Images (Draft Claim)</CardTitle>
-          <p className="text-sm text-gray-600">
+          <CardTitle className="text-2xl">Submit Accident Claim</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Upload images and basic details. A surveyor will review and complete the full claim.
           </p>
         </CardHeader>
@@ -120,19 +123,21 @@ export default function ClaimDraftPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
 
-            {/* ERROR BOX */}
+            {/* ERROR ALERT */}
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded p-4 text-red-800">
-                {error}
-              </div>
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             )}
 
             {/* USERNAME */}
-            <div>
-              <label className="block text-sm font-medium mb-2">
+            <div className="space-y-2">
+              <Label htmlFor="username">
                 Username <span className="text-red-600">*</span>
-              </label>
+              </Label>
               <Input
+                id="username"
                 name="username"
                 value={formData.username}
                 onChange={handleChange}
@@ -141,11 +146,12 @@ export default function ClaimDraftPage() {
             </div>
 
             {/* ACCIDENT DATE */}
-            <div>
-              <label className="block text-sm font-medium mb-2">
+            <div className="space-y-2">
+              <Label htmlFor="accident_date">
                 Accident Date <span className="text-red-600">*</span>
-              </label>
+              </Label>
               <Input
+                id="accident_date"
                 type="date"
                 name="accident_date"
                 value={formData.accident_date}
@@ -154,11 +160,12 @@ export default function ClaimDraftPage() {
             </div>
 
             {/* DESCRIPTION */}
-            <div>
-              <label className="block text-sm font-medium mb-2">
+            <div className="space-y-2">
+              <Label htmlFor="claim_description">
                 What happened? <span className="text-red-600">*</span>
-              </label>
+              </Label>
               <Textarea
+                id="claim_description"
                 name="claim_description"
                 value={formData.claim_description}
                 onChange={handleChange}
@@ -168,34 +175,46 @@ export default function ClaimDraftPage() {
             </div>
 
             {/* IMAGE UPLOAD */}
-            <div>
-              <label className="block text-sm font-medium mb-2">
+            <div className="space-y-2">
+              <Label htmlFor="images">
                 Upload Images <span className="text-red-600">*</span>
-              </label>
-              <Input type="file" accept="image/*" multiple onChange={handleImageChange} />
+              </Label>
+              <Input 
+                id="images"
+                type="file" 
+                accept="image/*" 
+                multiple 
+                onChange={handleImageChange}
+              />
+              <p className="text-xs text-muted-foreground">Maximum 10 images allowed</p>
             </div>
 
             {/* IMAGE PREVIEWS */}
             {imagePreviews.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {imagePreviews.map((url, index) => (
-                  <div key={index} className="relative border rounded">
-                    <img src={url} className="w-full h-40 object-cover rounded" />
-
-                    <button
-                      type="button"
-                      onClick={() => removeImage(index)}
-                      className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+              <div className="space-y-3">
+                <p className="text-sm font-medium">Image Previews ({imagePreviews.length})</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {imagePreviews.map((url, index) => (
+                    <div key={index} className="relative aspect-video rounded-lg border overflow-hidden bg-muted">
+                      <img src={url} alt={`Preview ${index}`} className="w-full h-full object-cover" />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="absolute top-2 right-2 h-7 w-7"
+                        onClick={() => removeImage(index)}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
             {/* SUBMIT BUTTON */}
-            <Button type="submit" disabled={loading} className="w-full py-3 text-lg">
+            <Button type="submit" disabled={loading} className="w-full">
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {loading ? "Submitting..." : "Submit Draft Claim"}
             </Button>
           </form>

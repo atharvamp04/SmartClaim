@@ -165,6 +165,37 @@ class ClaimHistorySerializer(serializers.ModelSerializer):
 
 
 # ============================================================
+# NEW: Claim Timeline for Visual Step Display
+# ============================================================
+
+class ClaimTimelineStepSerializer(serializers.Serializer):
+    """
+    Represents a single step in the claim timeline.
+    Maps ClaimHistory records to visual timeline steps.
+    """
+    step = serializers.CharField()  # e.g., "Submitted", "AI Analysis", etc.
+    status = serializers.CharField()  # Current claim status at this step
+    timestamp = serializers.DateTimeField()
+    performed_by = serializers.CharField()
+    notes = serializers.CharField(required=False, allow_blank=True)
+    is_completed = serializers.BooleanField()
+
+
+class ClaimTimelineSerializer(serializers.Serializer):
+    """
+    Complete timeline for a claim showing all steps from submission to decision.
+    """
+    claim_id = serializers.IntegerField()
+    claim_number = serializers.CharField()
+    current_status = serializers.CharField()
+    submitted_at = serializers.DateTimeField()
+    timeline_steps = ClaimTimelineStepSerializer(many=True)
+    
+    class Meta:
+        fields = ('claim_id', 'claim_number', 'current_status', 'submitted_at', 'timeline_steps')
+
+
+# ============================================================
 # EXISTING + MODIFIED: Claim (surveyor fields added)
 # ============================================================
 
