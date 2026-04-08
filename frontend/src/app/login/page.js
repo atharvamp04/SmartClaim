@@ -18,25 +18,54 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
+    console.log("=== LOGIN SUBMIT START ===");
+    console.log("Submitting login for:", { username, passwordLength: password?.length });
+
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/auth/login-with-role/", {
+      // Check backend connectivity (non-blocking — failure won't prevent login attempt)
+      console.log("Checking backend connectivity...");
+      try {
+        const healthRes = await fetch(`/api/detection/health/`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+        console.log("Backend health check status:", healthRes.status);
+      } catch (healthError) {
+        console.warn("Backend health check failed (non-fatal):", healthError);
+        // Don't block login — continue anyway
+      }
+
+      console.log("Attempting login...");
+      const res = await fetch(`/api/auth/login-with-role/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
 
       console.log("Login response status:", res.status);
+      console.log("Login response headers:", Object.fromEntries(res.headers.entries()));
 
       if (!res.ok) {
-        const data = await res.json();
-        console.error("Login error:", data);
-        setError(data.detail || data.error || "Login failed");
+        let errorMsg = "Login failed";
+        try {
+          const data = await res.json();
+          console.error("Login error:", data);
+          errorMsg = data.detail || data.error || errorMsg;
+        } catch {
+          errorMsg = `Server returned status ${res.status}. Please check that your backend is running.`;
+        }
+        setError(errorMsg);
         setLoading(false);
+        console.log("=== LOGIN SUBMIT END - ERROR ===");
         return;
       }
 
+
       const data = await res.json();
       console.log("Login successful. Received data:", data);
+      console.log("Response data keys:", Object.keys(data));
+      console.log("Access token length:", data.access?.length);
+      console.log("Role received:", data.role);
 
       // Store auth data
       localStorage.setItem("access_token", data.access);
@@ -47,6 +76,12 @@ export default function LoginPage() {
       }
 
       console.log("Stored role in localStorage:", data.role);
+      console.log("LocalStorage after login:", {
+        access_token: data.access?.substring(0, 20) + "...",
+        username: localStorage.getItem("username"),
+        user_role: localStorage.getItem("user_role"),
+        employee_id: localStorage.getItem("employee_id")
+      });
 
       setLoading(false);
 
@@ -70,10 +105,16 @@ export default function LoginPage() {
           router.push("/customer");
           break;
       }
+      console.log("=== LOGIN SUBMIT END - SUCCESS ===");
     } catch (err) {
       console.error("Catch error:", err);
-      setError("An error occurred. Please try again.");
+      if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
+        setError("Network error: Unable to connect to the backend server. Please ensure the Django server is running on http://127.0.0.1:8000");
+      } else {
+        setError("An error occurred. Please try again.");
+      }
       setLoading(false);
+      console.log("=== LOGIN SUBMIT END - CATCH ERROR ===");
     }
   };
 

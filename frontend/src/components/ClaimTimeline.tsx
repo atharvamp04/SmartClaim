@@ -82,7 +82,7 @@ export const ClaimTimeline: React.FC<ClaimTimelineProps> = ({
       }
 
       const response = await fetch(
-        `http://127.0.0.1:8000/api/detection/claims/${claimId}/timeline/`,
+        `/api/detection/claims/${claimId}/timeline/`,
         {
           headers: {
             Authorization: `Bearer ${token}`,

@@ -14,7 +14,22 @@ import base64
 from PIL import Image, ImageDraw, ImageFont
 import io
 import torch.nn.functional as F
-from decimal import Decimal
+from django.shortcuts import render
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.utils import timezone
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.models import User
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework import serializers
+from django.db.models import Q, Count, Avg, Sum
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 import logging
 from collections import defaultdict
 
@@ -33,10 +48,20 @@ from .serializers import (
     RegisterSerializer, PolicyholderSerializer,
     SurveyorListSerializer, AssignSurveyorSerializer, SurveyReportSerializer
 )
-from django.utils import timezone
-from rest_framework_simplejwt.tokens import RefreshToken
-from django.contrib.auth import authenticate
 
+# Import chat and appointment views
+from .chat_appointment_views import (
+    get_chat_messages, send_chat_message, mark_messages_read,
+    get_appointments, create_appointment, get_appointment_detail,
+    update_appointment, confirm_appointment, cancel_appointment,
+    get_surveyor_availability, set_surveyor_availability
+)
+from django.utils import timezone
+from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from .verification_apis import verify_dl, verify_rto, verify_fir, aggregate_verification
+from decouple import config
 
 # Import ML libraries
 try:
@@ -1328,15 +1353,13 @@ def get_detailed_image_predictions(image_path, image_model, device):
         }
 
 
-def calculate_detailed_fusion(tabular_details, image_details,
-                              dl_number=None, expiry_date=None,
-                              reg_no=None, make=None, year=None,
-                              fir_no=None):
-    """Calculate fusion with detailed mathematical breakdown + verification layer"""
-    try:
-        # === BASE MODEL PROBABILITIES ===
-        tabular_fraud_prob = tabular_details.get('ensemble_probabilities', {}).get('fraud', 0.4)
-        tabular_confidence = tabular_details.get('tabular_confidence', 0.6)
+def process_multiple_images(image_paths, image_model, device):
+    """Process multiple images and aggregate results"""
+    all_image_details = []
+    all_damage_info = []
+    
+    for idx, image_path in enumerate(image_paths):
+        print(f"📸 Processing image {idx + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
         
         # Get predictions for this image
         image_details = get_detailed_image_predictions(image_path, image_model, device)
@@ -1344,52 +1367,544 @@ def calculate_detailed_fusion(tabular_details, image_details,
         image_details['image_filename'] = os.path.basename(image_path)
         all_image_details.append(image_details)
         
-        # === CALCULATE WEIGHTS ===
-        total_confidence = tabular_confidence + image_confidence
-        if total_confidence > 0:
-            tabular_weight = tabular_confidence / total_confidence
-            image_weight = image_confidence / total_confidence
+        # Get damage detection visualization
+        if image_model is not None:
+            damage_info = process_damage_detection_image(image_path, image_model, device)
+            if damage_info:
+                damage_info['image_index'] = idx + 1
+                damage_info['image_filename'] = os.path.basename(image_path)
+                all_damage_info.append(damage_info)
+    
+    # Aggregate results across all images
+    aggregated_results = aggregate_multi_image_results(all_image_details)
+    
+    return {
+        'individual_image_results': all_image_details,
+        'individual_damage_detections': all_damage_info,
+        'aggregated_results': aggregated_results,
+        'total_images_processed': len(image_paths)
+    }
+
+
+def aggregate_multi_image_results(all_image_details):
+    """Aggregate predictions from multiple images into a single confidence score"""
+    if not all_image_details:
+        return {
+            'aggregation_method': 'none',
+            'final_image_fraud_probability': 0.3,
+            'final_image_confidence': 0.5
+        }
+    
+    # Extract key metrics from each image
+    fraud_probs = [img['image_fraud_probability'] for img in all_image_details]
+    confidences = [img['image_confidence'] for img in all_image_details]
+    damage_percentages = [img['damage_analysis']['damage_percentage'] for img in all_image_details]
+    severity_scores = [img['damage_analysis']['severity_score'] for img in all_image_details]
+    
+    # Method 1: Weighted average (higher confidence = higher weight)
+    total_confidence = sum(confidences)
+    if total_confidence > 0:
+        weighted_fraud_prob = sum(fp * conf for fp, conf in zip(fraud_probs, confidences)) / total_confidence
+    else:
+        weighted_fraud_prob = np.mean(fraud_probs)
+    
+    # Method 2: Maximum fraud probability (most suspicious image)
+    max_fraud_prob = max(fraud_probs)
+    max_fraud_idx = fraud_probs.index(max_fraud_prob)
+    
+    # Method 3: Average of top 2 most suspicious images
+    sorted_probs = sorted(fraud_probs, reverse=True)
+    top_k = min(2, len(sorted_probs))
+    top_k_avg = np.mean(sorted_probs[:top_k])
+    
+    # Method 4: Damage-weighted average
+    total_damage = sum(damage_percentages)
+    if total_damage > 0:
+        damage_weighted_prob = sum(
+            fp * dp for fp, dp in zip(fraud_probs, damage_percentages)
+        ) / total_damage
+    else:
+        damage_weighted_prob = np.mean(fraud_probs)
+    
+    # Final aggregation: Combine methods with tuned weights
+    # Prioritize the most suspicious images while considering overall pattern
+    final_fraud_probability = (
+        0.35 * max_fraud_prob +           # Highest single image
+        0.25 * weighted_fraud_prob +       # Confidence-weighted average
+        0.25 * top_k_avg +                 # Average of top suspicious images
+        0.15 * damage_weighted_prob        # Damage-based weighting
+    )
+    
+    # Calculate final confidence based on consistency across images
+    fraud_prob_std = np.std(fraud_probs)
+    confidence_consistency = 1.0 - min(fraud_prob_std / 0.5, 1.0)  # Lower std = higher consistency
+    final_confidence = (np.mean(confidences) + confidence_consistency) / 2
+    
+    # Determine overall severity
+    avg_damage_percentage = np.mean(damage_percentages)
+    max_damage_percentage = max(damage_percentages)
+    
+    if max_damage_percentage > 15 or avg_damage_percentage > 10:
+        overall_severity = "HIGH"
+    elif max_damage_percentage > 5 or avg_damage_percentage > 3:
+        overall_severity = "MEDIUM"
+    else:
+        overall_severity = "LOW"
+    
+    return {
+        'aggregation_method': 'multi_method_ensemble',
+        'total_images': len(all_image_details),
+        
+        'fraud_probability_distribution': {
+            'min': float(min(fraud_probs)),
+            'max': float(max(fraud_probs)),
+            'mean': float(np.mean(fraud_probs)),
+            'median': float(np.median(fraud_probs)),
+            'std': float(fraud_prob_std)
+        },
+        
+        'aggregation_components': {
+            'max_fraud_probability': float(max_fraud_prob),
+            'max_fraud_image_index': max_fraud_idx + 1,
+            'weighted_average': float(weighted_fraud_prob),
+            'top_k_average': float(top_k_avg),
+            'damage_weighted': float(damage_weighted_prob)
+        },
+        
+        'damage_summary': {
+            'avg_damage_percentage': float(avg_damage_percentage),
+            'max_damage_percentage': float(max_damage_percentage),
+            'min_damage_percentage': float(min(damage_percentages)),
+            'total_detections_all_images': sum(img['detection_results']['high_confidence_detections'] for img in all_image_details)
+        },
+        
+        'severity_analysis': {
+            'overall_severity': overall_severity,
+            'avg_severity_score': float(np.mean(severity_scores)),
+            'max_severity_score': float(max(severity_scores)),
+            'severity_levels': [img['damage_analysis']['severity_level'] for img in all_image_details]
+        },
+        
+        'confidence_metrics': {
+            'avg_confidence': float(np.mean(confidences)),
+            'confidence_consistency': float(confidence_consistency),
+            'final_confidence': float(final_confidence)
+        },
+        
+        # Final outputs for fusion
+        'final_image_fraud_probability': float(final_fraud_probability),
+        'final_image_confidence': float(final_confidence),
+        
+        'recommendation': {
+            'consistency': 'HIGH' if fraud_prob_std < 0.1 else 'MEDIUM' if fraud_prob_std < 0.2 else 'LOW',
+            'most_suspicious_image': max_fraud_idx + 1,
+            'images_requiring_attention': [i + 1 for i, fp in enumerate(fraud_probs) if fp > 0.6]
+        }
+    }
+
+##############################################
+##############################################
+
+# ============================================================================
+# YOLO INTEGRATION FUNCTIONS - PART 2
+# ============================================================================
+
+def process_yolo_detection_complete(image_path, yolo_parts_model, yolo_damage_model):
+    """Process single image with YOLO models to detect parts and damages"""
+    try:
+        results = {
+            'parts_detected': [],
+            'damages_detected': [],
+            'assignments': [],
+            'detection_successful': False
+        }
+        
+        # Detect car parts
+        if yolo_parts_model is not None:
+            parts_results = yolo_parts_model(image_path)[0]
+            
+            for box in parts_results.boxes:
+                cls_id = int(box.cls)
+                part_name = yolo_parts_model.names[cls_id]
+                confidence = float(box.conf)
+                bbox = box.xyxy[0].tolist()
+                
+                results['parts_detected'].append({
+                    'name': part_name,
+                    'confidence': confidence,
+                    'bbox': bbox,
+                    'center': ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+                })
+        
+        # Detect damages
+        if yolo_damage_model is not None:
+            damage_results = yolo_damage_model(image_path)[0]
+            
+            for box in damage_results.boxes:
+                cls_id = int(box.cls)
+                damage_name = yolo_damage_model.names[cls_id]
+                confidence = float(box.conf)
+                bbox = box.xyxy[0].tolist()
+                
+                results['damages_detected'].append({
+                    'name': damage_name,
+                    'confidence': confidence,
+                    'bbox': bbox,
+                    'center': ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+                })
+        
+        # Assign damages to parts (spatial matching)
+        for damage in results['damages_detected']:
+            dmg_center = damage['center']
+            assigned_part = None
+            max_overlap = 0
+            
+            for part in results['parts_detected']:
+                x1, y1, x2, y2 = part['bbox']
+                
+                # Check if damage center is inside part bbox
+                if x1 <= dmg_center[0] <= x2 and y1 <= dmg_center[1] <= y2:
+                    # Calculate overlap area
+                    overlap_area = (x2 - x1) * (y2 - y1)
+                    if overlap_area > max_overlap:
+                        max_overlap = overlap_area
+                        assigned_part = part['name']
+            
+            results['assignments'].append({
+                'damage_type': damage['name'],
+                'damage_confidence': damage['confidence'],
+                'assigned_part': assigned_part,
+                'damage_bbox': damage['bbox']
+            })
+        
+        results['detection_successful'] = True
+        return results
+        
+    except Exception as e:
+        print(f"❌ YOLO detection failed: {e}")
+        return {
+            'parts_detected': [],
+            'damages_detected': [],
+            'assignments': [],
+            'detection_successful': False,
+            'error': str(e)
+        }
+
+
+
+# ============================================================================
+# FINAL FIX: Replace the import line in calculate_claim_amount_from_yolo_deduplicated
+# ============================================================================
+
+def calculate_claim_amount_from_yolo_deduplicated(
+    yolo_results_all_images,
+    vehicle_make,
+    vehicle_model,
+    cnn_damage_percentage,
+    enable_deduplication=True,
+    confidence_threshold=0.5
+):
+    """
+    Calculate claim amount based on YOLO detections with duplicate removal
+    """
+    # ========================================================================
+    # REMOVE THIS LINE (it's causing the error):
+    # from .pricing_utils import get_part_price_from_db, get_damage_severity_multiplier_from_db
+    # ========================================================================
+    
+    # Instead, use the functions already in views.py
+    try:
+        # Step 1: Deduplicate detections
+        if enable_deduplication:
+            deduplicated_results, dedup_stats = deduplicate_detections(
+                yolo_results_all_images,
+                confidence_threshold
+            )
+            logger.info(f"Deduplication: {dedup_stats['total_detections']} → {dedup_stats['after_deduplication']} detections")
         else:
-            tabular_weight = 0.5
-            image_weight = 0.5
+            deduplicated_results = yolo_results_all_images
+            dedup_stats = {
+                'deduplication_enabled': False,
+                'total_detections': sum(len(r.get('assignments', [])) for r in yolo_results_all_images)
+            }
+        
+        # Step 2: Calculate claim amount
+        total_base_amount = 0
+        detailed_breakdown = []
+        pricing_sources = {'database': 0, 'fallback': 0, 'average': 0}
+        
+        for img_idx, yolo_result in enumerate(deduplicated_results):
+            if not yolo_result.get('detection_successful', False):
+                continue
+            
+            assignments = yolo_result.get('assignments', [])
+            
+            for assignment in assignments:
+                damage_type = assignment['damage_type']
+                assigned_part = assignment.get('assigned_part')
+                confidence = assignment.get('damage_confidence', 0)
+                
+                if assigned_part and assigned_part != 'UNASSIGNED':
+                    # Get part price (use functions in views.py, NOT from pricing_utils)
+                    part_price = get_part_price(vehicle_make, vehicle_model, assigned_part)
+                    
+                    # Get damage severity multiplier
+                    severity_multiplier = get_damage_severity_multiplier(damage_type)
+                    
+                    # Calculate damage cost
+                    damage_cost = part_price * severity_multiplier
+                    total_base_amount += damage_cost
+                    
+                    detailed_breakdown.append({
+                        'image_index': img_idx + 1,
+                        'part': assigned_part,
+                        'damage_type': damage_type,
+                        'part_price': float(part_price),
+                        'severity_multiplier': float(severity_multiplier),
+                        'damage_cost': float(damage_cost),
+                        'confidence': float(confidence),
+                        'price_source': 'fallback',  # We're using hardcoded prices for now
+                        'damage_source': 'fallback'
+                    })
+        
+        # Step 3: Validate breakdown
+        validation = validate_claim_breakdown(detailed_breakdown)
+        
+        if not validation['is_valid']:
+            logger.warning(f"Claim validation warnings: {validation['warnings']}")
+        
+        # Step 4: Apply CNN damage percentage multiplier
+        cnn_multiplier = 1 + (cnn_damage_percentage / 100)
+        final_claim_amount = total_base_amount * cnn_multiplier
+        
+        # Round to nearest 100
+        final_claim_amount = round(final_claim_amount / 100) * 100
+        
+        return {
+            'yolo_base_amount': float(total_base_amount),
+            'cnn_damage_percentage': float(cnn_damage_percentage),
+            'cnn_multiplier': float(cnn_multiplier),
+            'final_calculated_amount': float(final_claim_amount),
+            'detailed_breakdown': detailed_breakdown,
+            'total_damaged_parts': len(detailed_breakdown),
+            'unique_parts_damaged': len(set(item['part'] for item in detailed_breakdown)),
+            'calculation_formula': f'Base(₹{total_base_amount:.2f}) × CNN_Multiplier({cnn_multiplier:.2f}) = ₹{final_claim_amount:.2f}',
+            'pricing_sources_used': pricing_sources,
+            'deduplication_stats': dedup_stats,
+            'validation': validation,
+            'deduplication_enabled': enable_deduplication,
+            'confidence_threshold': confidence_threshold
+        }
+        
+    except Exception as e:
+        logger.error(f"Claim amount calculation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'yolo_base_amount': 0,
+            'cnn_damage_percentage': 0,
+            'cnn_multiplier': 1.0,
+            'final_calculated_amount': 0,
+            'detailed_breakdown': [],
+            'total_damaged_parts': 0,
+            'unique_parts_damaged': 0,
+            'deduplication_stats': {},
+            'error': str(e)
+        }
+
+
+
+def format_claim_breakdown_for_display(breakdown, group_by_image=True):
+    """
+    Format claim breakdown for clean frontend display
+    Groups by image and removes duplicates visually
+    """
+    if not breakdown:
+        return []
+    
+    if group_by_image:
+        # Group by image
+        images = defaultdict(list)
+        for item in breakdown:
+            images[item['image_index']].append(item)
+        
+        formatted = []
+        for img_idx in sorted(images.keys()):
+            items = images[img_idx]
+            formatted.append({
+                'image_index': img_idx,
+                'damages': items,
+                'image_total': sum(item['damage_cost'] for item in items),
+                'parts_count': len(set(item['part'] for item in items))
+            })
+        
+        return formatted
+    else:
+        # Flat list
+        return breakdown
+
+
+def get_deduplication_summary(dedup_stats):
+    """
+    Generate human-readable deduplication summary
+    """
+    if not dedup_stats or not dedup_stats.get('deduplication_enabled', True):
+        return "Deduplication was not applied"
+    
+    total = dedup_stats.get('total_detections', 0)
+    after = dedup_stats.get('after_deduplication', 0)
+    removed_dupes = dedup_stats.get('removed_duplicates', 0)
+    removed_low_conf = dedup_stats.get('removed_low_confidence', 0)
+    
+    if total == 0:
+        return "No detections to deduplicate"
+    
+    summary = f"Processed {total} detections:\n"
+    summary += f"  • Removed {removed_dupes} duplicate part detections\n"
+    summary += f"  • Removed {removed_low_conf} low-confidence detections\n"
+    summary += f"  • Final: {after} unique damages\n"
+    
+    if removed_dupes + removed_low_conf > 0:
+        savings_pct = ((removed_dupes + removed_low_conf) / total * 100) if total > 0 else 0
+        summary += f"  • Prevented {savings_pct:.1f}% claim inflation"
+    
+    return summary
+
+def process_multiple_images_with_yolo(image_paths, yolo_parts_model, yolo_damage_model, cnn_image_model, device):
+    """
+    Process multiple images with YOLO + CNN
+    Returns:
+    - YOLO detections for all images
+    - CNN damage analysis for all images
+    - Aggregated CNN results
+    """
+    yolo_results_all = []
+    cnn_results_all = []
+    cnn_damage_detections = []
+    
+    for idx, image_path in enumerate(image_paths):
+        print(f"📸 Processing image {idx + 1}/{len(image_paths)}: {os.path.basename(image_path)}")
+        
+        # YOLO detection
+        yolo_result = process_yolo_detection_complete(image_path, yolo_parts_model, yolo_damage_model)
+        yolo_result['image_index'] = idx + 1
+        yolo_result['image_filename'] = os.path.basename(image_path)
+        yolo_results_all.append(yolo_result)
+        
+        # CNN damage percentage analysis
+        cnn_result = get_detailed_image_predictions(image_path, cnn_image_model, device)
+        cnn_result['image_index'] = idx + 1
+        cnn_result['image_filename'] = os.path.basename(image_path)
+        cnn_results_all.append(cnn_result)
+        
+        # CNN damage visualization
+        if cnn_image_model is not None:
+            damage_viz = process_damage_detection_image(image_path, cnn_image_model, device)
+            if damage_viz:
+                damage_viz['image_index'] = idx + 1
+                damage_viz['image_filename'] = os.path.basename(image_path)
+                cnn_damage_detections.append(damage_viz)
+        else:
+            # Fallback: Create simple visualization when CNN model not available
+            print(f"⚠️  CNN model not available, using fallback visualization for image {idx + 1}")
+            fallback_viz = create_simple_damage_visualization(image_path)
+            if fallback_viz:
+                fallback_viz['image_index'] = idx + 1
+                fallback_viz['image_filename'] = os.path.basename(image_path)
+                cnn_damage_detections.append(fallback_viz)
+    
+    # Aggregate CNN results
+    cnn_aggregated = aggregate_multi_image_results(cnn_results_all)
+    
+    return {
+        'yolo_results_all_images': yolo_results_all,
+        'cnn_results_all_images': cnn_results_all,
+        'cnn_aggregated_results': cnn_aggregated,
+        'cnn_damage_visualizations': cnn_damage_detections,
+        'total_images_processed': len(image_paths)
+    }
+
+##############################################
+##############################################
+
+
+
+
+def calculate_detailed_fusion_with_yolo(
+    tabular_details,
+    cnn_aggregated_results,
+    yolo_claim_calculation,
+    dl_number=None,
+    expiry_date=None,
+    reg_no=None,
+    make=None,
+    year=None,
+    fir_no=None
+):
+    """
+    NEW FUSION MODEL:
+    - Tabular fraud probability (from XGBoost)
+    - CNN damage percentage (fraud indicator)
+    - YOLO calculated claim amount
+    - Document verification (info only)
+    
+    Logic:
+    1. Base fraud score = weighted avg of tabular + CNN fraud probability
+    2. Claim amount validation = Compare YOLO calculated vs user entered (if provided)
+    3. Final score = base + claim_mismatch_boost
+    """
+    try:
+        # === BASE MODEL PROBABILITIES ===
+        tabular_fraud_prob = tabular_details.get("probabilities", {}).get("fraud", 0.4)
+        tabular_confidence = tabular_details.get("primary_prediction", {}).get("confidence", 0.6)
+        
+        cnn_fraud_prob = cnn_aggregated_results.get("final_image_fraud_probability", 0.3)
+        cnn_confidence = cnn_aggregated_results.get("final_image_confidence", 0.7)
+        cnn_damage_percentage = cnn_aggregated_results.get("damage_summary", {}).get("avg_damage_percentage", 0)
+        
+        # === MODEL WEIGHTS ===
+        total_confidence = tabular_confidence + cnn_confidence
+        tabular_weight = tabular_confidence / total_confidence if total_confidence > 0 else 0.4
+        cnn_weight = cnn_confidence / total_confidence if total_confidence > 0 else 0.6
         
         # === FUSION METHODS ===
         weighted_fusion = (tabular_weight * tabular_fraud_prob) + (cnn_weight * cnn_fraud_prob)
         geometric_fusion = np.sqrt(max(tabular_fraud_prob * cnn_fraud_prob, 0))
         base_fusion_score = (0.65 * weighted_fusion) + (0.35 * geometric_fusion)
         
-        # === BASE FINAL FUSION ===
-        alpha = 0.6
-        beta = 0.4
-        base_fusion_score = (alpha * weighted_fusion) + (beta * geometric_fusion)
+        # === YOLO CLAIM AMOUNT ANALYSIS ===
+        calculated_amount = yolo_claim_calculation.get('final_calculated_amount', 0)
+        yolo_base = yolo_claim_calculation.get('yolo_base_amount', 0)
         
-        # ===================================================================
-        # 🔐 VERIFICATION INTEGRATION (DL / RTO / FIR)
-        # ===================================================================
+        claim_amount_info = {
+            'yolo_calculated_amount': float(calculated_amount),
+            'yolo_base_amount': float(yolo_base),
+            'cnn_damage_multiplier': float(yolo_claim_calculation.get('cnn_multiplier', 1.0)),
+            'total_parts_damaged': yolo_claim_calculation.get('total_damaged_parts', 0),
+            'breakdown': yolo_claim_calculation.get('detailed_breakdown', [])
+        }
+        
+        # === DOCUMENT VERIFICATION (INFO ONLY) ===
         dl_info = verify_dl(dl_number, expiry_date)
         rto_info = verify_rto(reg_no, make, year)
         fir_info = verify_fir(fir_no)
-
         verification_reliability = aggregate_verification(dl_info, rto_info, fir_info)
-        # lower reliability → higher fraud likelihood
-        verification_impact = (1 - verification_reliability)
-
-        # Weighted merge with verification reliability
-        gamma = 0.25  # how much verification affects fusion
-        final_fusion_score = ((1 - gamma) * base_fusion_score) + (gamma * verification_impact)
-
+        
+        # === FINAL FUSION SCORE ===
+        final_fusion_score = base_fusion_score
+        final_fusion_score = max(0.0, min(final_fusion_score, 0.99))
+        
         # === DECISION ===
         fraud_threshold = 0.5
         final_prediction = 1 if final_fusion_score > fraud_threshold else 0
         
-        # === RETURN STRUCTURE ===
         return {
-            'input_probabilities': {
-                'tabular_fraud_probability': float(tabular_fraud_prob),
-                'tabular_confidence': float(tabular_confidence),
-                'image_fraud_probability': float(image_fraud_prob),
-                'image_confidence': float(image_confidence),
-                'verification_reliability': float(verification_reliability)
+            "input_probabilities": {
+                "tabular_fraud_probability": float(tabular_fraud_prob),
+                "tabular_confidence": float(tabular_confidence),
+                "cnn_fraud_probability": float(cnn_fraud_prob),
+                "cnn_confidence": float(cnn_confidence),
+                "verification_reliability": float(verification_reliability)
             },
             "weight_calculation": {
                 "total_confidence": float(total_confidence),
@@ -1405,21 +1920,17 @@ def calculate_detailed_fusion(tabular_details, image_details,
                     "score": float(geometric_fusion)
                 }
             },
-            'verification_details': {
-                'dl': dl_info,
-                'rto': rto_info,
-                'fir': fir_info,
-                'combined_reliability': float(verification_reliability)
+            "yolo_claim_calculation": claim_amount_info,
+            "cnn_damage_analysis": {
+                "damage_percentage": float(cnn_damage_percentage),
+                "severity_level": cnn_aggregated_results.get("severity_analysis", {}).get("overall_severity", "LOW")
             },
-            'final_fusion': {
-                'alpha': float(alpha),
-                'beta': float(beta),
-                'gamma': float(gamma),
-                'calculation': f"(({1 - gamma} × base_fusion) + ({gamma} × (1−reliability)))",
-                'base_fusion': float(base_fusion_score),
-                'final_score': float(final_fusion_score),
-                'threshold': float(fraud_threshold),
-                'prediction': int(final_prediction)
+            "verification_details": {
+                "dl": dl_info,
+                "rto": rto_info,
+                "fir": fir_info,
+                "combined_reliability": float(verification_reliability),
+                "note": "⚠️ Verification is for information only - NOT scored into fraud detection"
             },
             "final_fusion": {
                 "base_fusion": float(base_fusion_score),
@@ -1444,28 +1955,14 @@ def calculate_detailed_fusion(tabular_details, image_details,
                 "cnn_fraud_probability": 0.3,
                 "cnn_confidence": 0.7
             },
-            "weight_calculation": {
-                "total_confidence": 1.3,
-                "tabular_weight": 0.46,
-                "image_weight": 0.54
+            "yolo_claim_calculation": {
+                'yolo_calculated_amount': 0,
+                'total_parts_damaged': 0
             },
-            "fusion_methods": {
-                "weighted_average": {"score": 0.35},
-                "geometric_mean": {"score": 0.32}
-            },
-            'verification_details': {
-                'dl': {'valid': False, 'dl_score': 0.4},
-                'rto': {'valid': False, 'rto_score': 0.4},
-                'fir': {'exists': False, 'fir_score': 0.3},
-                'combined_reliability': 0.37
-            },
-            'final_fusion': {
-                'alpha': 0.6,
-                'beta': 0.4,
-                'gamma': 0.25,
-                'final_score': 0.348,
-                'threshold': 0.5,
-                'prediction': 0
+            "final_fusion": {
+                "base_fusion": 0.35,
+                "final_score": 0.35,
+                "prediction": 0
             },
             "final_prediction": 0,
             "final_confidence": 0.35
@@ -1724,8 +2221,16 @@ def login_with_role(request):
             employee_id = profile.employee_id
             logger.info(f"User {username} logged in with role: {role}")
         except UserProfile.DoesNotExist:
-            logger.warning(f"UserProfile not found for user: {username}, defaulting to customer")
+            # Auto-create UserProfile for customers who don't have one
+            logger.info(f"Creating UserProfile for user: {username}")
+            profile = UserProfile.objects.create(
+                user=user,
+                role='customer',
+                employee_id=None
+            )
             role = 'customer'
+            employee_id = None
+            logger.info(f"Created UserProfile for {username} with role: {role}")
 
     return Response({
         'access': str(refresh.access_token),
@@ -1748,12 +2253,320 @@ class PolicyholderCreateView(APIView):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def get_customer_claims(request):
+    """
+    Get all claims for the logged-in customer
+    """
+    try:
+        # Get the user's policyholder record
+        try:
+            policyholder = Policyholder.objects.get(username=request.user.username)
+        except Policyholder.DoesNotExist:
+            return Response(
+                {"error": "Policyholder not found for this user"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all claims for this policyholder
+        claims = Claim.objects.filter(policyholder=policyholder).select_related(
+            'assigned_surveyor'
+        ).order_by('-submitted_at')
+        
+        # Serialize claims with assigned_surveyor field
+        claims_data = []
+        for claim in claims:
+            claim_data = {
+                'id': claim.id,
+                'claim_number': claim.claim_number,
+                'status': claim.status,
+                'claim_amount': float(claim.claim_amount),
+                'risk_level': claim.risk_level,
+                'fraud_detected': claim.fraud_detected,
+                'accident_date': claim.accident_date.isoformat() if claim.accident_date else None,
+                'submitted_at': claim.submitted_at.isoformat() if claim.submitted_at else None,
+                'updated_at': claim.updated_at.isoformat() if claim.updated_at else None,
+                'reviewed_by': claim.reviewed_by,
+                'reviewed_at': claim.reviewed_at.isoformat() if claim.reviewed_at else None,
+                'admin_notes': claim.admin_notes,
+                'rejection_reason': claim.rejection_reason,
+                'has_report': hasattr(claim, 'report') and claim.report is not None,
+                'assigned_surveyor': claim.assigned_surveyor.username if claim.assigned_surveyor else None,
+                'assigned_surveyor_name': claim.assigned_surveyor.username if claim.assigned_surveyor else None,
+            }
+            claims_data.append(claim_data)
+        
+        return Response({
+            'claims': claims_data,
+            'count': len(claims_data)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error getting customer claims: {str(e)}")
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def policyholder_detail(request, username):
     try:
         policyholder = Policyholder.objects.get(username=username)
     except Policyholder.DoesNotExist:
         return Response({"detail": "Not found."}, status=404)
     return Response(PolicyholderSerializer(policyholder).data)
+
+
+# --- Fraud Explainability Functions ---
+
+def format_feature_name(feature: str, label_map: dict) -> str:
+    """
+    Returns human-readable label. Falls back to cleaned feature name.
+    """
+    if feature in label_map:
+        return label_map[feature]
+    
+    # Clean fallback: split CamelCase and underscore names
+    import re
+    # Split CamelCase: 'BasePolicy' → 'Base Policy'
+    spaced = re.sub(r'([A-Z][a-z]+)', r' \1', feature).strip()
+    # Split underscores: 'days_policy' → 'Days Policy'
+    spaced = spaced.replace('_', ' ')
+    return spaced.title()
+
+
+def get_fraud_explanation(tabular_features, best_model, feature_names, top_n=8):
+    """
+    Generate SHAP-based explanation for fraud prediction.
+    Returns top factors that pushed score up or down.
+    """
+    try:
+        import shap
+        
+        # Handle CalibratedClassifierCV by extracting base estimator
+        model_to_explain = best_model
+        
+        # Robust multi-level unwrapping
+        unwrapped = False
+        for _ in range(3):
+            if hasattr(model_to_explain, 'calibrated_classifiers_') and len(model_to_explain.calibrated_classifiers_) > 0:
+                model_to_explain = getattr(model_to_explain.calibrated_classifiers_[0], 'estimator', model_to_explain.calibrated_classifiers_[0])
+                unwrapped = True
+            elif hasattr(model_to_explain, 'estimator') and not type(model_to_explain).__name__.endswith(('XGB', 'Forest', 'LGBM', 'Cat')):
+                model_to_explain = model_to_explain.estimator
+                unwrapped = True
+            elif hasattr(model_to_explain, 'base_estimator'):
+                model_to_explain = model_to_explain.base_estimator
+                unwrapped = True
+            else:
+                break
+        
+        if unwrapped:
+            print(f"🔧 Final model type for SHAP: {type(model_to_explain).__name__}")
+        
+        # Try TreeExplainer first as it's fastest for trees
+        try:
+            explainer = shap.TreeExplainer(model_to_explain)
+        except Exception:
+            # Fallback to general Explainer if TreeExplainer doesn't support the unwrapped model
+            print(f"⚠️ TreeExplainer failed for {type(model_to_explain).__name__}, trying general Explainer...")
+            explainer = shap.Explainer(model_to_explain, tabular_features)
+        
+        # Disable check_additivity for robust execution with wrapped models
+        shap_values = explainer.shap_values(tabular_features, check_additivity=False)
+        
+        # Handle different shap_values formats
+        # shap_values can be: list of arrays (one per class), 3D array (n_samples, n_features, n_classes), 
+        # or 2D array (n_samples, n_features) for binary XGBoost
+        if isinstance(shap_values, list):
+            # For list of arrays, usually class 1 is fraud
+            if len(shap_values) > 1:
+                shap_values = shap_values[1]
+            else:
+                shap_values = shap_values[0]
+        elif isinstance(shap_values, np.ndarray) and len(shap_values.shape) == 3:
+            # For 3D array (n_samples, n_features, n_classes), take class 1
+            if shap_values.shape[2] > 1:
+                shap_values = shap_values[:, :, 1]
+            else:
+                shap_values = shap_values[:, :, 0]
+        
+        # Convert log-odds to probability if value is outside 0-1 (common for XGB margin)
+        expected_value = explainer.expected_value
+        if hasattr(expected_value, '__len__'):
+            expected_value = expected_value[1]
+            
+        if expected_value > 1 or expected_value < 0:
+            base_rate_probability = float(1 / (1 + np.exp(-expected_value)))
+        else:
+            base_rate_probability = float(expected_value)
+        
+        # shap_values shape: (1, n_features)
+        feature_shap = dict(zip(feature_names, shap_values[0]))
+        
+        # Sort by absolute impact
+        sorted_features = sorted(
+            feature_shap.items(),
+            key=lambda x: abs(x[1]),
+            reverse=True
+        )[:top_n]
+        
+        fraud_factors = []  # things that increased fraud score
+        legitimate_factors = []  # things that decreased fraud score
+        
+        FEATURE_LABELS = {
+            # ── Must match EXACT column names from your dataset ──
+            'Fault':                    'Policyholder was at fault for the accident',
+            'BasePolicy':               'Base policy type is associated with higher fraud risk',
+            'PolicyNumber':             'Policy number pattern indicates elevated risk',
+            'DriverRating':             'Driver rating is within legitimate range',
+            'WeekOfMonthClaimed':       'Claim filed at a typical week of the month',
+            'RepNumber':                'Agent/rep number is outside suspicious range',
+            'WeekOfMonth':              'Week of month aligns with normal claim patterns',
+            'DayOfWeek':                'Day of week is consistent with genuine claims',
+            'DayOfWeekClaimed':         'Day claim was filed appears normal',
+            'MonthClaimed':             'Month of claim is within expected distribution',
+            'Month':                    'Policy month is within normal range',
+            'Make':                     'Vehicle make has lower fraud association',
+            'AccidentArea':             'Accident location risk factor',
+            'Sex':                      'Demographic factor in fraud model',
+            'MaritalStatus':            'Marital status factor in fraud model',
+            'Age':                      'Policyholder age is in elevated risk range',
+            'PolicyType':               'Policy type associated with fraud patterns',
+            'VehicleCategory':          'Vehicle category linked to claim patterns',
+            'VehiclePrice':             'High-value vehicle increases claim incentive',
+            'Days_Policy_Accident':     'Very few days between policy start and accident',
+            'Days_Policy_Claim':        'Claim filed very quickly after accident',
+            'PastNumberOfClaims':       'Policyholder has multiple past claims on record',
+            'AgeOfVehicle':             'Vehicle age affects expected damage cost',
+            'AgeOfPolicyHolder':        'Policyholder age is in high-risk bracket',
+            'PoliceReportFiled':        'Police report was filed — supports legitimacy',
+            'WitnessPresent':           'Witness present — supports claim legitimacy',
+            'AgentType':                'External agent involvement increases fraud risk',
+            'NumberOfSuppliments':      'Unusually high number of supplements filed',
+            'AddressChange_Claim':      'Address changed recently before filing claim',
+            'NumberOfCars':             'Number of insured cars affects risk profile',
+            'Year':                     'Policy year is a fraud pattern indicator',
+            'Deductible':               'Deductible amount correlates with claim behaviour',
+
+            # ── Your engineered features (from AdvancedFeatureEngineer) ──
+            'very_quick_claim':      'Claim filed very quickly after policy start',
+            'suspicious_combo':      'No witness + no police report + quick claim',
+            'serial_claimer':        'Multiple past claims on record',
+            'young_premium':         'Young high-risk driver with premium vehicle',
+            'many_supplements':      'Unusually high number of supplements filed',
+            'recent_address_change': 'Address changed recently before claim',
+            'external_agent':        'External agent — higher fraud association',
+            'weekend_claim':         'Claim filed on weekend',
+            'no_witness_no_police':  'No witness and no police FIR filed',
+            'has_evidence':          'Witness or police report supports legitimacy',
+            'first_time_claimer':    'First claim ever — lower historical risk',
+            'high_risk_age':         'Policyholder age is in high-risk range',
+            'premium_vehicle':       'High-value vehicle — higher fraud incentive',
+            'policyholder_fault':    'Policyholder at fault for accident',
+            'urban_accident':        'Accident occurred in urban area',
+        }
+        
+        for feature, shap_val in sorted_features:
+            label = format_feature_name(feature, FEATURE_LABELS)
+            impact = abs(shap_val)
+            
+            entry = {
+                'feature': feature,
+                'label': label,
+                'shap_value': float(shap_val),
+                'impact': float(impact),
+                'impact_level': 'HIGH' if impact > 0.1 else 'MEDIUM' if impact > 0.05 else 'LOW',
+                'direction': 'fraud' if shap_val > 0 else 'legitimate',
+            }
+            
+            if shap_val > 0:
+                fraud_factors.append(entry)
+            else:
+                legitimate_factors.append(entry)
+        
+        return {
+            'fraud_factors': fraud_factors,
+            'legitimate_factors': legitimate_factors,
+            'top_factor': fraud_factors[0]['label'] if fraud_factors else None,
+            'explanation_available': True,
+            'base_fraud_rate': base_rate_probability,
+            'base_fraud_rate_pct': round(base_rate_probability * 100, 1),
+            'method': 'shap',
+        }
+        
+    except Exception as e:
+        logger.error(f"SHAP explanation failed: {e}")
+        return {
+            'fraud_factors': [],
+            'legitimate_factors': [],
+            'explanation_available': False,
+            'error': str(e)
+        }
+
+
+def get_rule_based_explanation(tabular_df, fraud_probability):
+    """
+    Generate human-readable explanation from feature flags.
+    Works without SHAP — uses the engineered features directly.
+    """
+    flags = []
+    
+    row = tabular_df.iloc[0]
+    
+    # Check each engineered feature
+    RULES = [
+        ('very_quick_claim', 'HIGH', 'fraud', 'Claim filed within days of policy start — strong fraud indicator'),
+        ('suspicious_combo', 'HIGH', 'fraud', 'No witness + no police report + quick claim — highly suspicious combination'),
+        ('serial_claimer', 'HIGH', 'fraud', 'Policyholder has 2+ previous claims on record'),
+        ('young_premium', 'MEDIUM', 'fraud', 'Young high-risk driver with premium vehicle'),
+        ('many_supplements', 'MEDIUM', 'fraud', 'Unusually high number of claim supplements filed'),
+        ('recent_address_change', 'MEDIUM', 'fraud', 'Address changed within 3 years before filing claim'),
+        ('external_agent', 'MEDIUM', 'fraud', 'Policy managed by external agent — higher fraud association'),
+        ('weekend_claim', 'LOW', 'fraud', 'Claim filed on weekend — slightly elevated risk'),
+        ('no_witness_no_police', 'MEDIUM', 'fraud', 'No supporting evidence: no witnesses and no FIR filed'),
+        ('policyholder_fault', 'LOW', 'fraud', 'Policyholder admitted fault — may indicate staged accident'),
+        ('premium_vehicle', 'LOW', 'fraud', 'High-value vehicle — higher incentive to commit fraud'),
+        ('has_evidence', 'MEDIUM', 'legitimate', 'Witness or police report present — supports claim legitimacy'),
+        ('first_time_claimer', 'LOW', 'legitimate', 'First claim ever filed — lower historical risk'),
+    ]
+    
+    for feature, impact, direction, label in RULES:
+        if feature in row and row[feature] == 1:
+            # Assign dummy shap_value for visualization if needed
+            dummy_shap = 0.25 if impact == 'HIGH' else 0.15 if impact == 'MEDIUM' else 0.05
+            if direction == 'legitimate': dummy_shap *= -1
+            
+            flags.append({
+                'feature': feature,
+                'label': label,
+                'impact_level': impact,
+                'direction': direction,
+                'shap_value': dummy_shap,
+            })
+    
+    fraud_factors = [f for f in flags if f['direction'] == 'fraud']
+    legitimate_factors = [f for f in flags if f['direction'] == 'legitimate']
+    
+    # Generate a one-line summary
+    if fraud_probability > 0.7:
+        summary = f"High fraud risk detected. Primary concerns: {', '.join([f['feature'].replace('_', ' ') for f in fraud_factors[:2]])}"
+    elif fraud_probability > 0.5:
+        summary = f"Moderate fraud indicators present. Review {len(fraud_factors)} flagged factor(s)."
+    else:
+        summary = f"Low fraud risk. {len(legitimate_factors)} factor(s) support claim legitimacy."
+    
+    return {
+        'fraud_factors': fraud_factors,
+        'legitimate_factors': legitimate_factors,
+        'top_factor': fraud_factors[0]['label'] if fraud_factors else summary,
+        'base_fraud_rate': 0.15,  # Statistical average fallback
+        'base_fraud_rate_pct': 15.0,
+        'summary': summary,
+        'flags_count': len(fraud_factors),
+        'explanation_available': True,
+        'method': 'rule_based'
+    }
 
 
 # --- Main Prediction Endpoint ---
@@ -1961,6 +2774,32 @@ def predict_claim(request):
             threshold_strategy
         )
         
+        # Generate fraud explanation
+        try:
+            feature_names = _preprocessing_objects['feature_names']
+            fraud_explanation = get_fraud_explanation(
+                tabular_features,
+                _calibrated_model,
+                feature_names
+            )
+            
+            # If SHAP fails, fallback to rule-based explanation
+            if not fraud_explanation.get('explanation_available', False):
+                fraud_probability = tabular_details.get('probabilities', {}).get('fraud', 0)
+                fraud_explanation = get_rule_based_explanation(tabular_df, fraud_probability)
+                print("⚠️ SHAP failed, using rule-based explanation")
+            else:
+                print("✅ SHAP explanation generated successfully")
+                
+        except Exception as e:
+            print(f"❌ Fraud explanation generation failed: {e}")
+            fraud_explanation = {
+                'fraud_factors': [],
+                'legitimate_factors': [],
+                'explanation_available': False,
+                'error': str(e)
+            }
+        
         print("✅ Tabular fraud detection complete")
         
     except Exception as e:
@@ -2102,6 +2941,9 @@ def predict_claim(request):
             "tabular_analysis": tabular_details,
             "fusion_analysis": fusion_details
         },
+        
+        # Fraud explanation
+        "fraud_explanation": fraud_explanation,
         
         "debug_info": {
             "yolo_parts_model_loaded": _yolo_parts_model is not None,
@@ -2351,11 +3193,19 @@ def surveyor_submit_report(request, claim_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Extract report data
+        # Extract report data (supports both multipart/form-data and JSON)
         surveyor_notes = request.data.get('surveyor_notes')
         surveyor_recommendation = request.data.get('surveyor_recommendation')
         surveyor_assessed_amount = request.data.get('surveyor_assessed_amount')
-        damage_verified = request.data.get('damage_verified')
+        # FormData sends booleans as strings ("true"/"false") — coerce to Python bool
+        _dv_raw = request.data.get('damage_verified')
+        if isinstance(_dv_raw, str):
+            damage_verified = _dv_raw.lower() == 'true'
+        else:
+            damage_verified = _dv_raw  # already a bool (JSON request)
+        
+        # Field photos uploaded by surveyor
+        field_photos = request.FILES.getlist('field_photos')
         
         # Validate recommendation if provided
         if surveyor_recommendation:
@@ -2394,14 +3244,35 @@ def surveyor_submit_report(request, claim_id):
         
         claim.save()
         
+        # Save field photos uploaded by surveyor
+        from .models import ClaimHistory, SurveyorFieldPhoto
+        saved_photos = []
+        for photo_file in field_photos:
+            try:
+                caption = request.data.get('caption', '')
+                field_photo = SurveyorFieldPhoto.objects.create(
+                    claim=claim,
+                    photo=photo_file,
+                    uploaded_by=request.user,
+                    caption=caption
+                )
+                saved_photos.append({
+                    'photo_url': field_photo.photo.url,
+                    'caption': field_photo.caption,
+                    'uploaded_at': field_photo.uploaded_at.isoformat()
+                })
+                logger.info(f"Saved field photo for claim {claim.claim_number}")
+            except Exception as photo_err:
+                logger.warning(f"Could not save field photo: {photo_err}")
+        
         # Log the action in claim history
-        from .models import ClaimHistory
+        photo_note = f" {len(saved_photos)} field photo(s) uploaded." if saved_photos else ""
         ClaimHistory.objects.create(
             claim=claim,
             action='surveyor_report',
             old_status=old_status,
             new_status=claim.status,
-            notes=f"Surveyor {request.user.username} submitted inspection report. Recommendation: {surveyor_recommendation}",
+            notes=f"Surveyor {request.user.username} submitted inspection report. Recommendation: {surveyor_recommendation}.{photo_note}",
             performed_by=request.user.username
         )
         
@@ -2417,7 +3288,9 @@ def surveyor_submit_report(request, claim_id):
             "surveyor_recommendation": claim.surveyor_recommendation,
             "surveyor_assessed_amount": float(claim.surveyor_assessed_amount) if claim.surveyor_assessed_amount else None,
             "damage_verified": claim.damage_verified,
-            "survey_completed_at": claim.survey_completed_at.isoformat()
+            "survey_completed_at": claim.survey_completed_at.isoformat(),
+            "field_photos_saved": len(saved_photos),
+            "field_photos": saved_photos
         }, status=status.HTTP_200_OK)
     
     except UserProfile.DoesNotExist:
@@ -2574,6 +3447,12 @@ def list_surveyors(request):
         
         surveyor_list = []
         for surveyor in surveyors:
+            # Count active claims for this surveyor
+            active_claims_count = Claim.objects.filter(
+                assigned_surveyor=surveyor.user,
+                status__in=['Pending', 'Fraud', 'Under Survey']
+            ).count()
+            
             surveyor_list.append({
                 "id": surveyor.user.id,
                 "username": surveyor.user.username,
@@ -2581,7 +3460,9 @@ def list_surveyors(request):
                 "first_name": surveyor.user.first_name,
                 "last_name": surveyor.user.last_name,
                 "role": surveyor.role,
-                "phone": surveyor.phone if hasattr(surveyor, 'phone') else None
+                "phone": surveyor.phone if hasattr(surveyor, 'phone') else None,
+                "active_claims": active_claims_count,
+                "assigned_region": getattr(surveyor, 'assigned_region', None)
             })
         
         return Response({

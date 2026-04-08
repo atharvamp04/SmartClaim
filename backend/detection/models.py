@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.postgres.fields import JSONField  # Use this if using PostgreSQL
+from django.db.models import JSONField  # Django 3.1+ - use this instead
 from django.contrib.auth.models import User
 # OR for Django 3.1+
 # from django.db.models import JSONField
@@ -27,6 +27,101 @@ class UserProfile(models.Model):
     class Meta:
         verbose_name = 'User Profile'
         verbose_name_plural = 'User Profiles'
+
+# ============================================================
+# NEW: Chat and Appointment System Models
+# ============================================================
+
+class ChatMessage(models.Model):
+    """Model for chat messages between customer and surveyor"""
+    claim = models.ForeignKey('Claim', on_delete=models.CASCADE, related_name='chat_messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
+    message = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+    message_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('text', 'Text'),
+            ('appointment', 'Appointment'),
+            ('system', 'System'),
+        ],
+        default='text'
+    )
+    
+    class Meta:
+        ordering = ['timestamp']
+        indexes = [
+            models.Index(fields=['claim', 'timestamp']),
+            models.Index(fields=['sender', 'recipient']),
+        ]
+
+    def __str__(self):
+        return f"{self.sender.username} → {self.recipient.username}: {self.message[:50]}..."
+
+class Appointment(models.Model):
+    """Model for appointments between customer and surveyor"""
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('confirmed', 'Confirmed'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+        ('rescheduled', 'Rescheduled'),
+    ]
+    
+    claim = models.ForeignKey('Claim', on_delete=models.CASCADE, related_name='appointments')
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='customer_appointments')
+    surveyor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='surveyor_appointments')
+    proposed_datetime = models.DateTimeField()
+    duration_minutes = models.PositiveIntegerField(default=60)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    location = models.TextField(help_text="Address or location for the survey visit")
+    notes = models.TextField(blank=True, null=True, help_text="Additional notes for the appointment")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Customer availability preferences
+    customer_preferences = JSONField(default=dict, blank=True, help_text="Customer's preferred time slots")
+    
+    class Meta:
+        ordering = ['proposed_datetime']
+        indexes = [
+            models.Index(fields=['claim', 'status']),
+            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['surveyor', 'status']),
+            models.Index(fields=['proposed_datetime']),
+        ]
+
+    def __str__(self):
+        return f"Appointment for {self.claim.claim_number} - {self.proposed_datetime.strftime('%Y-%m-%d %H:%M')}"
+
+class AppointmentAvailability(models.Model):
+    """Model for surveyor availability slots"""
+    surveyor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='availability_slots')
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_available = models.BooleanField(default=True)
+    max_appointments = models.PositiveIntegerField(default=1)
+    current_appointments = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['date', 'start_time']
+        unique_together = ['surveyor', 'date', 'start_time']
+        indexes = [
+            models.Index(fields=['surveyor', 'date', 'is_available']),
+        ]
+
+    def __str__(self):
+        return f"{self.surveyor.username} - {self.date} {self.start_time} to {self.end_time}"
+
+# ============================================================
+# EXISTING MODELS CONTINUE...
+# ============================================================
 
 class Policyholder(models.Model):
     email = models.EmailField(unique=True)
@@ -134,6 +229,8 @@ class Claim(models.Model):
     reviewed_at = models.DateTimeField(null=True, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    fraud_explanation = models.JSONField(default=dict, blank=True)
+    fraud_summary = models.TextField(blank=True, null=True)
 
     # --- NEW: Surveyor Assignment Fields ---
     assigned_surveyor = models.ForeignKey(

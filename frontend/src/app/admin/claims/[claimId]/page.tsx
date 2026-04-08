@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft, CheckCircle, XCircle, Loader2,
-  AlertTriangle, Calendar, User, DollarSign,
+  AlertTriangle, AlertCircle, Calendar, User, DollarSign,
   FileText, Shield, Image as ImageIcon, Database,
   Activity, TrendingUp, Home, Clock, LogOut, Menu,
   UserCheck, MapPin, Camera, ClipboardCheck, Download,
-  FileDown
+  FileDown, Brain, MessageCircle
 } from "lucide-react";
 import {
   Tabs,
@@ -87,7 +87,7 @@ export default function ClaimDetailPage() {
       const token = localStorage.getItem("access_token");
       if (!token) { window.location.href = "/login"; return; }
 
-      const res = await fetch(`${API_BASE_URL}/claims/${claimId}/`, {
+      const res = await fetch(`${API_BASE_URL}/claims/${claimId}/?t=${Date.now()}`, {
         headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" }
       });
 
@@ -96,8 +96,21 @@ export default function ClaimDetailPage() {
         throw new Error(`Failed to load claim: ${res.status}`);
       }
       const data = await res.json();
+      console.log('=== FRESH API CALL DEBUG ===');
+      console.log('Raw API data received:', data);
+      console.log('fraud_explanation in raw data:', data.fraud_explanation);
+      console.log('Type of fraud_explanation in raw data:', typeof data.fraud_explanation);
+      console.log('All keys in API response:', Object.keys(data));
+      console.log('=== END DEBUG ===');
+
       setClaim(data);
       setError(null);
+
+      // Debug after state update
+      setTimeout(() => {
+        console.log('Claim state after update:', claim);
+        console.log('fraud_explanation in claim state:', claim?.fraud_explanation);
+      }, 100);
     } catch (err: any) {
       setError(err.message || "Failed to load claim");
     } finally {
@@ -108,14 +121,24 @@ export default function ClaimDetailPage() {
   const fetchSurveyors = async () => {
     try {
       const token = localStorage.getItem("access_token");
+      if (!token) {
+        console.error("No token found for fetchSurveyors");
+        return;
+      }
+
       const res = await fetch(`${API_BASE_URL}/admin/surveyors/`, {
         headers: { "Authorization": `Bearer ${token}` }
       });
+
       if (res.ok) {
         const data = await res.json();
         setSurveyors(data.surveyors || []);
+      } else {
+        console.error(`Failed to fetch surveyors: ${res.status} ${res.statusText}`);
       }
-    } catch (err) { console.error("Failed to fetch surveyors:", err); }
+    } catch (err) {
+      console.error("Failed to fetch surveyors:", err);
+    }
   };
 
   const handleAssignSurveyor = async () => {
@@ -133,6 +156,7 @@ export default function ClaimDetailPage() {
       const data = await res.json();
       setAssignSuccess(data.message);
       await fetchClaim();
+      await fetchSurveyors(); // Refresh surveyors list to update active claims count
     } catch (err: any) {
       alert(err.message || "Failed to assign surveyor");
     } finally {
@@ -310,11 +334,10 @@ export default function ClaimDetailPage() {
               {decisionResult ? (
                 /* Success result */
                 <div className="space-y-3">
-                  <div className={`p-4 rounded-xl border-2 text-center ${
-                    pendingDecision === "Verified"
+                  <div className={`p-4 rounded-xl border-2 text-center ${pendingDecision === "Verified"
                       ? "bg-green-50 border-green-300"
                       : "bg-red-50 border-red-300"
-                  }`}>
+                    }`}>
                     <p className="text-lg font-bold">
                       {pendingDecision === "Verified" ? "✅ Claim Approved!" : "❌ Claim Rejected!"}
                     </p>
@@ -421,7 +444,7 @@ export default function ClaimDetailPage() {
                       className={`flex-1 text-white ${pendingDecision === "Verified"
                         ? "bg-green-600 hover:bg-green-700"
                         : "bg-red-700 hover:bg-red-800"
-                      }`}
+                        }`}
                     >
                       {processing ? (
                         <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Processing...</>
@@ -441,7 +464,7 @@ export default function ClaimDetailPage() {
         </div>
       )}
 
-      <Sidebar className="border-r bg-white">
+      <Sidebar className="border-r bg-white w-64">
         <SidebarContent className="flex flex-col h-full">
           <SidebarGroup className="flex-1">
             <SidebarGroupLabel className="text-xl font-bold px-6 py-5 text-black border-b">
@@ -558,12 +581,15 @@ export default function ClaimDetailPage() {
                       className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">— Select a surveyor —</option>
-                      {surveyors.map((s) => (
-                        <option key={s.username} value={s.username}>
-                          {s.username}{s.assigned_region ? ` (${s.assigned_region})` : ""}
-                          {` · ${s.active_claims} active claim${s.active_claims !== 1 ? "s" : ""}`}
-                        </option>
-                      ))}
+                      {surveyors.map((s) => {
+                        const activeClaims = s.active_claims || s.activeClaims || 0;
+                        return (
+                          <option key={s.username} value={s.username}>
+                            {s.username}{s.assigned_region ? ` (${s.assigned_region})` : ""}
+                            {` · ${activeClaims} active claim${activeClaims !== 1 ? "s" : ""}`}
+                          </option>
+                        );
+                      })}
                     </select>
                     <Button
                       onClick={handleAssignSurveyor}
@@ -753,9 +779,10 @@ export default function ClaimDetailPage() {
 
             {/* ============ TABS ============ */}
             <Tabs defaultValue="overview" className="w-full">
-              <TabsList className="w-full grid grid-cols-3 lg:grid-cols-7 mb-6">
+              <TabsList className="w-full grid grid-cols-3 lg:grid-cols-8 mb-6">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="analysis">Analysis</TabsTrigger>
+                <TabsTrigger value="reasoning">AI Reasoning</TabsTrigger>
                 <TabsTrigger value="documents">Documents</TabsTrigger>
                 <TabsTrigger value="images">Images</TabsTrigger>
                 <TabsTrigger value="database">Database</TabsTrigger>
@@ -877,6 +904,259 @@ export default function ClaimDetailPage() {
                         ))}
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* AI REASONING TAB */}
+              <TabsContent value="reasoning">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>AI Reasoning - Fraud Explainability</CardTitle>
+                    <CardDescription>SHAP-based explanation of fraud detection factors</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Executive Summary - Human Readable Paragraphs */}
+                    {claim.fraud_explanation && (
+                      <div className="p-6 border rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50">
+                        <h4 className="font-semibold text-blue-900 mb-4 flex items-center gap-2">
+                          <Brain className="h-5 w-5" /> Executive Summary
+                        </h4>
+                        
+                        {/* Overall Assessment Paragraph */}
+                        <div className="mb-4 p-4 bg-white rounded-lg border border-blue-100">
+                          <p className="text-gray-800 leading-relaxed">
+                            <strong>Overall Assessment:</strong> Our AI analysis has determined this claim carries a 
+                            <span className={`font-bold ${claim.fraud_explanation.base_fraud_rate > 0.5 ? 'text-red-600' : 'text-yellow-600'}`}>
+                              {claim.fraud_explanation.base_fraud_rate > 0.7 ? ' high' : 
+                               claim.fraud_explanation.base_fraud_rate > 0.4 ? ' moderate' : ' elevated'}
+                            </span> risk profile. The base fraud rate for similar claims in the market is 
+                            <span className="font-semibold text-blue-700">
+                              {claim.fraud_explanation.base_fraud_rate <= 1 && claim.fraud_explanation.base_fraud_rate >= 0
+                                ? ` ${(claim.fraud_explanation.base_fraud_rate * 100).toFixed(1)}%`
+                                : ` based on complex risk modeling`}
+                            </span>, while this specific claim shows additional risk factors that require careful consideration.
+                          </p>
+                        </div>
+
+                        {/* Key Fraud Indicators Paragraph */}
+                        {claim.fraud_explanation.fraud_factors && claim.fraud_explanation.fraud_factors.length > 0 && (
+                          <div className="mb-4 p-4 bg-red-50 rounded-lg border border-red-100">
+                            <p className="text-gray-800 leading-relaxed">
+                              <strong className="text-red-700">Primary Fraud Indicators:</strong> The most significant concern is 
+                              <span className="font-bold text-red-600"> {claim.fraud_explanation.top_factor || 'multiple risk factors'}</span>.
+                              {claim.fraud_explanation.fraud_factors.slice(0, 2).map((factor: any, idx: number) => (
+                                <span key={idx}>
+                                  {idx === 0 ? ' Specifically, ' : ' Additionally, '}
+                                  the <span className="font-semibold"> {factor.label.toLowerCase()}</span> 
+                                  <span className="text-red-600"> increases fraud risk by {Math.abs(factor.shap_value * 100).toFixed(1)}%</span>
+                                  {factor.impact_level === 'HIGH' ? ' and represents a critical warning sign' : 
+                                   factor.impact_level === 'MEDIUM' ? ' and warrants further investigation' : 
+                                   ' and should be monitored closely'}.
+                                </span>
+                              ))}
+                              {claim.fraud_explanation.fraud_factors.length > 2 && 
+                                <span className="text-red-600"> Additional risk factors have also been identified.</span>
+                              }
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Legitimacy Factors Paragraph */}
+                        {claim.fraud_explanation.legitimate_factors && claim.fraud_explanation.legitimate_factors.length > 0 && (
+                          <div className="mb-4 p-4 bg-green-50 rounded-lg border border-green-100">
+                            <p className="text-gray-800 leading-relaxed">
+                              <strong className="text-green-700">Mitigating Factors:</strong> On the positive side, 
+                              {claim.fraud_explanation.legitimate_factors.slice(0, 2).map((factor: any, idx: number) => (
+                                <span key={idx}>
+                                  {idx === 0 ? ' ' : ' '}
+                                  the <span className="font-semibold text-green-600"> {factor.label.toLowerCase()}</span>
+                                  <span className="text-green-600"> reduces fraud risk by {Math.abs(factor.shap_value * 100).toFixed(1)}%</span>
+                                  {idx < claim.fraud_explanation.legitimate_factors.length - 1 && idx < 1 ? ', ' : '.'}
+                                </span>
+                              ))}
+                              {claim.fraud_explanation.legitimate_factors.length > 2 && 
+                                <span className="text-green-600"> These legitimate indicators help balance the overall risk assessment.</span>
+                              }
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Recommendation Paragraph */}
+                        <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-100">
+                          <p className="text-gray-800 leading-relaxed">
+                            <strong className="text-yellow-700">Recommendation:</strong> 
+                            {claim.fraud_explanation.fraud_factors && claim.fraud_explanation.fraud_factors.some((f: any) => f.impact_level === 'HIGH') 
+                              ? ' Given the presence of high-risk indicators, we strongly recommend field verification by a surveyor before proceeding with this claim. The combination of risk factors warrants thorough investigation.'
+                              : claim.fraud_explanation.fraud_factors && claim.fraud_explanation.fraud_factors.length > 2
+                              ? ' While some risk factors are present, they may be within acceptable ranges. Consider additional documentation or partial verification before final decision.'
+                              : ' This claim shows relatively normal patterns with minor risk considerations. Standard verification procedures should suffice.'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Main Analysis Summary */}
+                    {claim.fraud_explanation ? (
+                      <>
+                        {/* Summary Section */}
+                        <div className="p-4 border rounded-lg bg-blue-50">
+                          <h4 className="font-semibold text-blue-900 mb-2">Summary</h4>
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <div>
+                              <p className="text-sm text-blue-800">
+                                <strong>Top Fraud Factor:</strong> {claim.fraud_explanation.top_factor || 'N/A'}
+                              </p>
+                              <p className="text-sm text-blue-800 mt-1">
+                                <strong>Explanation Method:</strong> {claim.fraud_explanation.method === 'rule_based' ? 'Rule-based Heuristics' : 'SHAP (SHapley Additive exPlanations)'}
+                              </p>
+                            </div>
+                            <div className="p-3 bg-white/50 rounded-lg border border-blue-100">
+                              <p className="text-xs text-blue-400">Base Fraud Rate (Population Average)</p>
+                              <p className="text-sm font-semibold text-blue-700">
+                                {claim.fraud_explanation.base_fraud_rate <= 1 && claim.fraud_explanation.base_fraud_rate >= 0
+                                  ? `${(claim.fraud_explanation.base_fraud_rate * 100).toFixed(1)}%`
+                                  : `Log-odds: ${Number(claim.fraud_explanation.base_fraud_rate).toFixed(3)}`}
+                              </p>
+                              <p className="text-[10px] text-blue-500 mt-0.5">
+                                Market-wide average risk for similar claims
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Fraud Factors */}
+                        {claim.fraud_explanation.fraud_factors && claim.fraud_explanation.fraud_factors.length > 0 && (
+                          <div>
+                            <h4 className="font-semibold text-red-700 mb-3 flex items-center gap-2">
+                              <span>🔴</span> Fraud Indicators (Increased Risk)
+                            </h4>
+                            <div className="space-y-3">
+                              {claim.fraud_explanation.fraud_factors.map((factor: any, idx: number) => (
+                                <div key={idx} className="border rounded-lg p-4 bg-red-50 border-red-200">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <div className="flex-1">
+                                      <p className="font-medium text-red-900">{factor.label}</p>
+                                      {/* Raw feature hidden - only for audit trace if needed */}
+                                      {/* <p className="text-[10px] text-red-300">Internal Key: {factor.feature}</p> */}
+                                    </div>
+                                    <div className="text-right">
+                                      <Badge className={
+                                        factor.impact_level === 'HIGH' ? 'bg-red-600' :
+                                          factor.impact_level === 'MEDIUM' ? 'bg-orange-500' :
+                                            'bg-yellow-500'
+                                      }>
+                                        {factor.impact_level}
+                                      </Badge>
+                                    </div>
+                                  </div>
+
+                                  {/* SHAP Impact Bar */}
+                                  <div className="mt-3">
+                                    <div className="flex justify-between items-center text-xs text-gray-600 mb-1">
+                                      <span>SHAP Impact</span>
+                                      <span>{(factor.shap_value * 100).toFixed(2)}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div
+                                        className="bg-red-500 h-2 rounded-full transition-all duration-300"
+                                        style={{ width: `${Math.min(Math.abs(factor.shap_value) * 100, 100)}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Legitimate Factors */}
+                        {claim.fraud_explanation.legitimate_factors && claim.fraud_explanation.legitimate_factors.length > 0 && (
+                          <div>
+                            <h4 className="font-semibold text-green-700 mb-3 flex items-center gap-2">
+                              <span>🟢</span> Legitimacy Indicators (Decreased Risk)
+                            </h4>
+                            <div className="space-y-3">
+                              {claim.fraud_explanation.legitimate_factors.map((factor: any, idx: number) => (
+                                <div key={idx} className="border rounded-lg p-4 bg-green-50 border-green-200">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <div className="flex-1">
+                                      <p className="font-medium text-green-900">{factor.label}</p>
+                                      {/* Raw feature hidden */}
+                                      {/* <p className="text-[10px] text-green-300">Internal Key: {factor.feature}</p> */}
+                                    </div>
+                                    <div className="text-right">
+                                      <Badge className={
+                                        factor.impact_level === 'HIGH' ? 'bg-green-600' :
+                                          factor.impact_level === 'MEDIUM' ? 'bg-lime-500' :
+                                            'bg-green-400'
+                                      }>
+                                        {factor.impact_level}
+                                      </Badge>
+                                    </div>
+                                  </div>
+
+                                  {/* SHAP Impact Bar (Negative) */}
+                                  <div className="mt-3">
+                                    <div className="flex justify-between items-center text-xs text-gray-600 mb-1">
+                                      <span>SHAP Impact (Reduces Risk)</span>
+                                      <span>{(Math.abs(factor.shap_value) * 100).toFixed(2)}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div
+                                        className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                                        style={{ width: `${Math.min(Math.abs(factor.shap_value) * 100, 100)}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Technical Details */}
+                        <div className="p-4 border rounded-lg bg-gray-50">
+                          <h4 className="font-semibold text-gray-900 mb-2">Technical Details</h4>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                              <p className="text-gray-600">Fraud Factors Count</p>
+                              <p className="font-bold">{claim.fraud_explanation.fraud_factors?.length || 0}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Legitimate Factors Count</p>
+                              <p className="font-bold">{claim.fraud_explanation.legitimate_factors?.length || 0}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Total Factors Analyzed</p>
+                              <p className="font-bold">
+                                {(claim.fraud_explanation.fraud_factors?.length || 0) + (claim.fraud_explanation.legitimate_factors?.length || 0)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-gray-600">Explanation Available</p>
+                              <p className="font-bold text-green-600">✅ Yes</p>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-8">
+                        <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold text-gray-900 mb-2">No AI Reasoning Available</h3>
+                        <p className="text-gray-600 max-w-md mx-auto">
+                          Fraud explanation data is not available for this claim. This could be because:
+                        </p>
+                        <ul className="text-sm text-gray-600 mt-2 max-w-md mx-auto text-left">
+                          <li>• The claim was processed before SHAP explanations were implemented</li>
+                          <li>• SHAP explanation generation failed during processing</li>
+                          <li>• The explanation data was not saved to the database</li>
+                        </ul>
+                        <p className="text-xs text-gray-500 mt-4">
+                          Claim ID: {claim.id} | Check backend logs for more details
+                        </p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -1086,6 +1366,27 @@ export default function ClaimDetailPage() {
                       <div className="p-4 bg-gray-50 rounded-lg border">
                         <p className="text-sm text-gray-600 mb-2">Field Survey Notes</p>
                         <p className="text-gray-800 leading-relaxed">{claim.surveyor_notes}</p>
+                      </div>
+                    )}
+                    {claim.assigned_surveyor_name && (
+                      <div className="p-4 border rounded-lg bg-green-50">
+                        <h4 className="font-semibold text-green-900 mb-3 flex items-center gap-2">
+                          <MessageCircle className="h-4 w-4" />
+                          Communication Status
+                        </h4>
+                        <div className="grid md:grid-cols-2 gap-4 text-sm">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span className="text-gray-700">Chat Available</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Calendar className="h-3 w-3 text-blue-600" />
+                            <span className="text-gray-700">Appointment Scheduling Enabled</span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-green-700 mt-2">
+                          Customer and surveyor can communicate directly through the chat and appointment system.
+                        </p>
                       </div>
                     )}
                     {claim.is_assigned_to_surveyor && (

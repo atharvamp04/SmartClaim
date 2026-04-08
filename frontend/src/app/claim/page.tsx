@@ -29,15 +29,15 @@ export default function ClaimPage() {
     username: username,
     claim_description: "",
     accident_date: "",
-    claim_amount: "",
+    vehicle_make: "",
+    vehicle_model: "",
     dl_number: "",
     vehicle_reg_no: "",
     fir_number: "",
-
   });
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-  
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -45,6 +45,15 @@ export default function ClaimPage() {
   const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
 
 
+
+  // Handle input changes
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
 
   // Handle select dropdown changes
   const handleSelectChange = (value: string) => {
@@ -102,7 +111,7 @@ export default function ClaimPage() {
 
       try {
         const token = localStorage.getItem("access_token");
-        const res = await fetch(`http://127.0.0.1:8000/api/policyholders/${username}/`, {
+        const res = await fetch(`/api/policyholders/${username}/`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -160,38 +169,6 @@ export default function ClaimPage() {
       setError("Accident date cannot be in the future");
       return false;
     }
-
-    // Try to parse as JSON
-    let resData;
-    try {
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        setError("You must be logged in to submit a claim");
-        setLoading(false);
-        return;
-      }
-
-      const data = new FormData();
-      data.append("username", formData.username.trim());
-      data.append("claim_description", formData.claim_description.trim());
-      data.append("accident_date", formData.accident_date);
-      data.append("claim_amount", formData.claim_amount);
-      data.append("car_image", imageFile!);
-      data.append("dl_number", formData.dl_number.trim());
-      data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
-      data.append("fir_number", formData.fir_number.trim());
-
-
-      const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: data,
-      });
-
-      const resData = await res.json();
-      console.log("Response from server:", resData);
 
     if (!formData.vehicle_make) {
       setError("Vehicle make is required");
@@ -252,7 +229,7 @@ export default function ClaimPage() {
       data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
       data.append("fir_number", formData.fir_number.trim());
 
-      const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
+      const res = await fetch(`/api/detection/predict-claim/`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -668,7 +645,7 @@ export default function ClaimPage() {
                           <p className="text-sm font-medium">{result.recommended_action.message}</p>
                           {result.recommended_action.next_steps && (
                             <ul className="text-sm list-disc pl-5 text-muted-foreground">
-                            {result.recommended_action.next_steps.map((step: any, idx: any) => (
+                              {result.recommended_action.next_steps.map((step: any, idx: any) => (
                                 <li key={idx}>{step}</li>
                               ))}
                             </ul>
@@ -696,11 +673,10 @@ export default function ClaimPage() {
                             <button
                               key={idx}
                               onClick={() => setSelectedImageIndex(idx)}
-                              className={`flex-shrink-0 h-20 w-20 rounded border-2 overflow-hidden transition ${
-                                selectedImageIndex === idx
-                                  ? 'border-blue-500 shadow-lg'
-                                  : 'border-gray-200 hover:border-gray-400'
-                              }`}
+                              className={`flex-shrink-0 h-20 w-20 rounded border-2 overflow-hidden transition ${selectedImageIndex === idx
+                                ? 'border-blue-500 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-400'
+                                }`}
                             >
                               <img
                                 src={preview}
@@ -769,9 +745,9 @@ export default function ClaimPage() {
                                 <span>Damage Detection - Image {img.image_index || idx + 1}</span>
                                 {img.damage_percentage !== undefined && (
                                   <Badge className={
-                                    img.damage_percentage > 15 ? 'bg-red-500' : 
-                                    img.damage_percentage > 5 ? 'bg-orange-500' :
-                                    'bg-green-500'
+                                    img.damage_percentage > 15 ? 'bg-red-500' :
+                                      img.damage_percentage > 5 ? 'bg-orange-500' :
+                                        'bg-green-500'
                                   }>
                                     {img.damage_percentage.toFixed(1)}% Damaged
                                   </Badge>
@@ -863,91 +839,91 @@ export default function ClaimPage() {
                     )}
 
                     {/* Fallback: Show damage analysis from multi_image_analysis if annotated images empty */}
-                    {(!result.annotated_images || result.annotated_images.length === 0) && 
-                     result.multi_image_analysis?.individual_images && result.multi_image_analysis.individual_images.length > 0 && (
-                      <Card className="mt-4 border-2 border-blue-200 bg-blue-50">
-                        <CardHeader>
-                          <CardTitle className="text-base">CNN Damage Analysis (Fallback View)</CardTitle>
-                          <p className="text-sm text-muted-foreground mt-1">Detailed damage data without annotated images</p>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-3">
-                            {result.multi_image_analysis.individual_images.map((img: any, idx: any) => (
-                              <div key={idx} className="border rounded-lg p-4 bg-white hover:shadow-md transition">
-                                <div className="flex justify-between items-start mb-3">
-                                  <h5 className="font-semibold text-sm">
-                                    Image {img.image_index || idx + 1}
-                                    {img.image_filename && <span className="text-xs text-muted-foreground ml-2">({img.image_filename})</span>}
-                                  </h5>
-                                  {img.damage_analysis?.damage_percentage !== undefined && (
-                                    <Badge className={
-                                      img.damage_analysis.damage_percentage > 15 ? 'bg-red-500' : 
-                                      img.damage_analysis.damage_percentage > 5 ? 'bg-orange-500' :
-                                      'bg-green-500'
-                                    }>
-                                      {img.damage_analysis.damage_percentage.toFixed(1)}% Damaged
-                                    </Badge>
+                    {(!result.annotated_images || result.annotated_images.length === 0) &&
+                      result.multi_image_analysis?.individual_images && result.multi_image_analysis.individual_images.length > 0 && (
+                        <Card className="mt-4 border-2 border-blue-200 bg-blue-50">
+                          <CardHeader>
+                            <CardTitle className="text-base">CNN Damage Analysis (Fallback View)</CardTitle>
+                            <p className="text-sm text-muted-foreground mt-1">Detailed damage data without annotated images</p>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="space-y-3">
+                              {result.multi_image_analysis.individual_images.map((img: any, idx: any) => (
+                                <div key={idx} className="border rounded-lg p-4 bg-white hover:shadow-md transition">
+                                  <div className="flex justify-between items-start mb-3">
+                                    <h5 className="font-semibold text-sm">
+                                      Image {img.image_index || idx + 1}
+                                      {img.image_filename && <span className="text-xs text-muted-foreground ml-2">({img.image_filename})</span>}
+                                    </h5>
+                                    {img.damage_analysis?.damage_percentage !== undefined && (
+                                      <Badge className={
+                                        img.damage_analysis.damage_percentage > 15 ? 'bg-red-500' :
+                                          img.damage_analysis.damage_percentage > 5 ? 'bg-orange-500' :
+                                            'bg-green-500'
+                                      }>
+                                        {img.damage_analysis.damage_percentage.toFixed(1)}% Damaged
+                                      </Badge>
+                                    )}
+                                  </div>
+
+                                  {img.damage_analysis && (
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded">
+                                      <div>
+                                        <p className="text-xs text-muted-foreground">Damage %</p>
+                                        <p className="text-lg font-bold text-orange-600">
+                                          {img.damage_analysis.damage_percentage?.toFixed(1)}%
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-xs text-muted-foreground">Severity</p>
+                                        <p className="text-lg font-bold text-red-600">
+                                          {img.damage_analysis.severity_level || 'Unknown'}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-xs text-muted-foreground">Severity Score</p>
+                                        <p className="text-lg font-bold text-purple-600">
+                                          {img.damage_analysis.severity_score?.toFixed(2) || 'N/A'}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-xs text-muted-foreground">Weighted Score</p>
+                                        <p className="text-lg font-bold text-blue-600">
+                                          {img.damage_analysis.weighted_damage_score?.toFixed(2) || 'N/A'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {img.detection_results && (
+                                    <div className="mt-3 p-2 bg-blue-50 rounded text-sm">
+                                      <p className="text-muted-foreground">
+                                        Detections: {img.detection_results.total_detections} (High confidence: {img.detection_results.high_confidence_detections})
+                                      </p>
+                                    </div>
+                                  )}
+
+                                  {img.damage_analysis?.damage_regions && img.damage_analysis.damage_regions.length > 0 && (
+                                    <div className="mt-3">
+                                      <p className="text-xs font-semibold text-muted-foreground mb-2">
+                                        Damage Regions: {img.damage_analysis.damage_regions.length}
+                                      </p>
+                                      <div className="space-y-1 max-h-[150px] overflow-y-auto text-xs">
+                                        {img.damage_analysis.damage_regions.map((region: any, ridx: any) => (
+                                          <div key={ridx} className="p-2 bg-gray-50 rounded font-mono">
+                                            Region {region.region_id}: {(region.confidence * 100).toFixed(1)}% confidence,
+                                            {(region.relative_size * 100).toFixed(1)}% of image
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
                                   )}
                                 </div>
-
-                                {img.damage_analysis && (
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 bg-gray-50 p-3 rounded">
-                                    <div>
-                                      <p className="text-xs text-muted-foreground">Damage %</p>
-                                      <p className="text-lg font-bold text-orange-600">
-                                        {img.damage_analysis.damage_percentage?.toFixed(1)}%
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-muted-foreground">Severity</p>
-                                      <p className="text-lg font-bold text-red-600">
-                                        {img.damage_analysis.severity_level || 'Unknown'}
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-muted-foreground">Severity Score</p>
-                                      <p className="text-lg font-bold text-purple-600">
-                                        {img.damage_analysis.severity_score?.toFixed(2) || 'N/A'}
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-muted-foreground">Weighted Score</p>
-                                      <p className="text-lg font-bold text-blue-600">
-                                        {img.damage_analysis.weighted_damage_score?.toFixed(2) || 'N/A'}
-                                      </p>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {img.detection_results && (
-                                  <div className="mt-3 p-2 bg-blue-50 rounded text-sm">
-                                    <p className="text-muted-foreground">
-                                      Detections: {img.detection_results.total_detections} (High confidence: {img.detection_results.high_confidence_detections})
-                                    </p>
-                                  </div>
-                                )}
-
-                                {img.damage_analysis?.damage_regions && img.damage_analysis.damage_regions.length > 0 && (
-                                  <div className="mt-3">
-                                    <p className="text-xs font-semibold text-muted-foreground mb-2">
-                                      Damage Regions: {img.damage_analysis.damage_regions.length}
-                                    </p>
-                                    <div className="space-y-1 max-h-[150px] overflow-y-auto text-xs">
-                                      {img.damage_analysis.damage_regions.map((region: any, ridx: any) => (
-                                        <div key={ridx} className="p-2 bg-gray-50 rounded font-mono">
-                                          Region {region.region_id}: {(region.confidence * 100).toFixed(1)}% confidence, 
-                                          {(region.relative_size * 100).toFixed(1)}% of image
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
                   </CardContent>
                 </Card>
               </TabsContent>

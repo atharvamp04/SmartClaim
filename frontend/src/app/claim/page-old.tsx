@@ -155,7 +155,7 @@ export default function ClaimPage() {
 
       try {
         const token = localStorage.getItem("access_token");
-        const res = await fetch(`http://127.0.0.1:8000/api/policyholders/${username}/`, {
+        const res = await fetch(`/api/policyholders/${username}/`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -286,11 +286,11 @@ export default function ClaimPage() {
       data.append("vehicle_reg_no", formData.vehicle_reg_no.trim());
       data.append("fir_number", formData.fir_number.trim());
 
-      console.log("🚀 Making request to:", "http://127.0.0.1:8000/api/detection/predict-claim/");
+      console.log("🚀 Making request to:", `/api/detection/predict-claim/`);
       console.log("🔑 Token:", token ? "Present" : "Missing");
       console.log("🚗 Vehicle Info:", formData.vehicle_make, formData.vehicle_model);
 
-      const res = await fetch("http://127.0.0.1:8000/api/detection/predict-claim/", {
+      const res = await fetch(`/api/detection/predict-claim/`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

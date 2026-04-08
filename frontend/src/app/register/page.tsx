@@ -35,7 +35,7 @@ export default function RegisterPage() {
 
     try {
       // 1. Register
-      const registerRes = await fetch("http://127.0.0.1:8000/api/detection/register/", {
+      const registerRes = await fetch(`/api/detection/register/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email, password }),
@@ -49,7 +49,7 @@ export default function RegisterPage() {
       }
 
       // 2. Auto-login after successful registration
-      const loginRes = await fetch("http://127.0.0.1:8000/api/auth/login/", {
+      const loginRes = await fetch(`/api/auth/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),

@@ -45,7 +45,7 @@ import {
 import { useSidebar } from "@/components/ui/sidebar";
 import ClaimTimeline from "@/components/ClaimTimeline";
 
-const API_BASE = "http://127.0.0.1:8000/api/detection";
+const API_BASE = `/api/detection`;
 
 type NotificationType = "success" | "error" | "warning" | "info" | "pending";
 
