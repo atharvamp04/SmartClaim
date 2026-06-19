@@ -862,8 +862,113 @@ def preprocess_inference_data(df, preprocessing_objects):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Indian make → American training-set equivalent
+# The XGBoost was trained on a 1994 US dataset (Allstate fraud data).
+# Indian makes are not in the label encoder, so we map them to the nearest
+# US make whose fraud-risk profile is most comparable.  This is better than
+# letting the encoder silently fall back to le.classes_[0] (Audi) for every
+# Indian brand, which always produces a near-zero fraud score.
+# ---------------------------------------------------------------------------
+INDIAN_MAKE_TO_TRAINING_EQUIVALENT = {
+    # Tata: mid-market, high urban fraud exposure → Toyota (mid-market US)
+    'tata':              'Toyota',
+    'tata motors':       'Toyota',
+    # Mahindra: SUV-heavy, rural+urban → Ford (similar SUV profile)
+    'mahindra':          'Ford',
+    'mahindra & mahindra': 'Ford',
+    # Maruti / Suzuki: high-volume, budget → Chevrolet
+    'maruti':            'Chevrolet',
+    'maruti suzuki':     'Chevrolet',
+    'suzuki':            'Chevrolet',
+    # Hyundai: already in training data (spelled exactly)
+    'hyundai':           'Honda',
+    # Kia: similar to Hyundai
+    'kia':               'Honda',
+    # Honda: exact match
+    'honda':             'Honda',
+    # Toyota: exact match
+    'toyota':            'Toyota',
+    # Ford: exact match
+    'ford':              'Ford',
+    # Volkswagen / Skoda: premium European → Mercury
+    'volkswagen':        'Volkswagen',
+    'vw':                'Volkswagen',
+    'skoda':             'Volkswagen',
+    # Renault / Nissan → Pontiac (mid-market)
+    'renault':           'Pontiac',
+    'nissan':            'Pontiac',
+    # MG: premium → Mercury
+    'mg':                'Mercury',
+    'mg motor':          'Mercury',
+    # Jeep: exact match
+    'jeep':              'Jeep',
+    # BMW / Mercedes / Audi: luxury → Cadillac / Mercury
+    'bmw':               'Mercury',
+    'mercedes':          'Mercury',
+    'mercedes-benz':     'Mercury',
+    'audi':              'Mercury',
+    # Default / unknown Indian make → Toyota (lowest-fraud mid-market)
+}
+
+# INR → USD-equivalent tier thresholds for claim-amount heuristics.
+# 1 USD ≈ 83 INR (2024).  The training data uses USD bands.
+# We convert the INR claim amount to its USD value and apply the same bands.
+_INR_TO_USD = 83.0   # approximate exchange rate
+
+
+def _map_indian_make(raw_make: str) -> str:
+    """Return the training-set equivalent for an Indian/unknown make."""
+    key = raw_make.strip().lower()
+    mapped = INDIAN_MAKE_TO_TRAINING_EQUIVALENT.get(key)
+    if mapped:
+        print(f"🚗 Make mapping: '{raw_make}' → '{mapped}' (training-set equivalent)")
+        return mapped
+    # If already a known US make (partial match), return as-is
+    for us_make in ['Honda', 'Toyota', 'Ford', 'Chevrolet', 'Pontiac',
+                    'Mercury', 'Dodge', 'Saab', 'Saturn', 'Cadillac',
+                    'Volkswagen', 'Jeep', 'BMW', 'Accura', 'Ferrari',
+                    'Porche', 'Lexus', 'Nisson', 'Mecedes']:
+        if us_make.lower() in key:
+            print(f"🚗 Make: '{raw_make}' recognised as training make → '{us_make}'")
+            return us_make
+    # Unknown → Toyota (safest mid-fraud baseline)
+    print(f"⚠️ Make '{raw_make}' unknown to training set → defaulting to 'Toyota'")
+    return 'Toyota'
+
+
+def _map_vehicle_price_inr(inr_amount: float) -> str:
+    """
+    Convert INR vehicle price to the USD price band used in training data.
+    Training bands (USD): less than 20000 / 20000-29000 / 30000-39000 /
+                          40000-49000 / 50000-59000 / 60000-69000 / more than 69000
+    """
+    usd = inr_amount / _INR_TO_USD
+    if usd < 20000:
+        return 'less than 20000'
+    elif usd < 30000:
+        return '20000 to 29000'
+    elif usd < 40000:
+        return '30000 to 39000'
+    elif usd < 50000:
+        return '40000 to 49000'
+    elif usd < 60000:
+        return '50000 to 59000'
+    elif usd < 70000:
+        return '60000 to 69000'
+    else:
+        return 'more than 69000'
+
+
 def create_inference_data(policyholder, claim_amount=None, *args, **kwargs):
-    """Builds a single-row pandas DataFrame for fraud prediction inference"""
+    """Builds a single-row pandas DataFrame for fraud prediction inference.
+
+    Key adaptations for Indian cars on an American-trained XGBoost:
+    - Maps Indian make names to the nearest US training-set equivalent
+    - Converts INR claim-amount to USD-equivalent tiers for heuristics
+    - Forces Year=1994 (the only year in the training dataset) so the
+      StandardScaler does not produce an extreme outlier for recent years
+    """
     import pandas as pd
 
     defaults = {
@@ -878,11 +983,45 @@ def create_inference_data(policyholder, claim_amount=None, *args, **kwargs):
         'Fault': 'Policy Holder',
     }
 
+    # --- Make: always map to training-set equivalent ---
+    raw_make = getattr(policyholder, 'vehicle_make', 'Toyota') or 'Toyota'
+    training_make = _map_indian_make(raw_make)
+
+    # --- VehicleCategory: map Indian body types to training categories ---
+    # Training cats: Sedan / Sport / Utility
+    raw_category = getattr(policyholder, 'vehicle_category', 'Sedan') or 'Sedan'
+    _cat_map = {
+        'suv': 'Utility', 'cuv': 'Utility', 'mpv': 'Utility',
+        'hatchback': 'Sedan', 'sedan': 'Sedan', 'saloon': 'Sedan',
+        'coupe': 'Sport', 'sportscar': 'Sport', 'sport': 'Sport',
+        'utility': 'Utility', 'truck': 'Utility', 'pickup': 'Utility',
+    }
+    training_category = _cat_map.get(raw_category.strip().lower(), 'Sedan')
+
+    # --- VehiclePrice: respect stored category or fall back to INR conversion ---
+    raw_price_cat = getattr(policyholder, 'vehicle_price_category', None)
+    training_price_band = raw_price_cat if raw_price_cat else '20000 to 29000'
+
+    # --- PolicyType: ensure it is a valid training value ---
+    # Training values: 'Sedan - Liability', 'Sedan - Collision', 'Sedan - All Perils',
+    #                  'Sport - Liability', 'Sport - Collision', 'Sport - All Perils',
+    #                  'Utility - Liability', 'Utility - Collision', 'Utility - All Perils'
+    raw_policy = getattr(policyholder, 'policy_type', None) or ''
+    _valid_policy_types = [
+        'Sedan - Liability', 'Sedan - Collision', 'Sedan - All Perils',
+        'Sport - Liability', 'Sport - Collision', 'Sport - All Perils',
+        'Utility - Liability', 'Utility - Collision', 'Utility - All Perils',
+    ]
+    if raw_policy not in _valid_policy_types:
+        training_policy = f"{training_category} - Collision"
+    else:
+        training_policy = raw_policy
+
     data = {
         'Month': getattr(policyholder, 'month', 'Jan'),
         'WeekOfMonth': getattr(policyholder, 'week_of_month', 3),
         'DayOfWeek': getattr(policyholder, 'day_of_week', 'Monday'),
-        'Make': getattr(policyholder, 'vehicle_make', 'Honda'),
+        'Make': training_make,                    # ← mapped to US training equivalent
         'AccidentArea': getattr(policyholder, 'address_area', 'Urban'),
         'DayOfWeekClaimed': getattr(policyholder, 'day_of_week_claimed', 'Tuesday'),
         'MonthClaimed': getattr(policyholder, 'month_claimed', 'Jan'),
@@ -891,9 +1030,9 @@ def create_inference_data(policyholder, claim_amount=None, *args, **kwargs):
         'MaritalStatus': getattr(policyholder, 'marital_status', 'Single'),
         'Age': int(getattr(policyholder, 'age', 30)),
         'Fault': defaults['Fault'],
-        'PolicyType': getattr(policyholder, 'policy_type', 'Sedan - Liability'),
-        'VehicleCategory': getattr(policyholder, 'vehicle_category', 'Sedan'),
-        'VehiclePrice': getattr(policyholder, 'vehicle_price_category', '20000 to 29000'),
+        'PolicyType': training_policy,            # ← validated to training values
+        'VehicleCategory': training_category,     # ← mapped (Utility/Sedan/Sport)
+        'VehiclePrice': training_price_band,      # ← USD band
         'PolicyNumber': 1,
         'RepNumber': 1,
         'Deductible': int(getattr(policyholder, 'deductible', defaults['Deductible'])),
@@ -901,7 +1040,7 @@ def create_inference_data(policyholder, claim_amount=None, *args, **kwargs):
         'Days_Policy_Accident': getattr(policyholder, 'days_policy_accident', defaults['Days_Policy_Accident']),
         'Days_Policy_Claim': getattr(policyholder, 'days_policy_claim', defaults['Days_Policy_Claim']),
         'PastNumberOfClaims': int(getattr(policyholder, 'past_number_of_claims', defaults['PastNumberOfClaims'])),
-        'AgeOfVehicle': getattr(policyholder, 'age_of_vehicle', '3 to 4'),
+        'AgeOfVehicle': getattr(policyholder, 'age_of_vehicle', '3 years'),
         'AgeOfPolicyHolder': getattr(policyholder, 'age_of_policyholder', '31 to 35'),
         'PoliceReportFiled': getattr(policyholder, 'police_report_filed', defaults['PoliceReportFiled']),
         'WitnessPresent': getattr(policyholder, 'witness_present', defaults['WitnessPresent']),
@@ -909,35 +1048,72 @@ def create_inference_data(policyholder, claim_amount=None, *args, **kwargs):
         'NumberOfSuppliments': getattr(policyholder, 'number_of_suppliments', defaults['NumberOfSuppliments']),
         'AddressChange_Claim': getattr(policyholder, 'address_change_claim', defaults['AddressChange_Claim']),
         'NumberOfCars': getattr(policyholder, 'number_of_cars', '1 vehicle'),
-        'Year': int(getattr(policyholder, 'year_of_vehicle', 1994)),
+        # Year: training data is entirely 1994; any other year is out-of-distribution
+        # and causes the StandardScaler to produce extreme values.  Lock to 1994.
+        'Year': 1994,
         'BasePolicy': getattr(policyholder, 'base_policy', 'Liability'),
     }
 
+    # -------------------------------------------------------------------------
+    # Claim-amount heuristics — convert INR → USD equivalent before applying
+    # the same USD bands that the training-data fraud patterns follow.
+    # -------------------------------------------------------------------------
     if claim_amount:
         try:
-            claim_amount = float(claim_amount)
-            if claim_amount > 80000:
+            claim_amount_inr = float(claim_amount)
+            claim_amount_usd = claim_amount_inr / _INR_TO_USD
+
+            print(f"💵 Claim amount ₹{claim_amount_inr:,.0f} "
+                  f"≈ ${claim_amount_usd:,.0f} USD — applying Indian insurance risk heuristics")
+
+            if claim_amount_usd > 50000:          # ₹41.5 L+  — very large claim
                 data['PoliceReportFiled'] = 'Yes'
                 data['WitnessPresent'] = 'Yes'
                 data['Days_Policy_Claim'] = '1 to 7'
                 data['Days_Policy_Accident'] = '1 to 7'
                 data['AddressChange_Claim'] = '1 year'
                 data['NumberOfSuppliments'] = 'more than 5'
-            elif claim_amount > 50000:
+                data['VehiclePrice'] = 'more than 69000'
+                print("   → Very large claim tier: 1-7 days, police + witness filed")
+
+            elif claim_amount_usd > 30000:        # ₹24.9 L – 41.5 L — significant
                 data['PoliceReportFiled'] = 'Yes'
                 data['WitnessPresent'] = 'No'
                 data['Days_Policy_Claim'] = '8 to 15'
                 data['Days_Policy_Accident'] = '8 to 15'
                 data['AddressChange_Claim'] = '2 to 3 years'
-            elif claim_amount < 20000:
+                data['VehiclePrice'] = '60000 to 69000'
+                print("   → Significant claim tier: 8-15 days, police filed")
+
+            elif claim_amount_usd > 15000:        # ₹12.45 L – 24.9 L — moderate
+                data['PoliceReportFiled'] = 'No'
+                data['WitnessPresent'] = 'No'
+                data['Days_Policy_Claim'] = '15 to 30'
+                data['Days_Policy_Accident'] = '15 to 30'
+                data['VehiclePrice'] = '40000 to 49000'
+                print("   → Moderate claim tier: 15-30 days")
+
+            elif claim_amount_usd > 5000:         # ₹4.15 L – 12.45 L — small
                 data['PoliceReportFiled'] = 'No'
                 data['WitnessPresent'] = 'No'
                 data['Days_Policy_Claim'] = 'more than 30'
                 data['Days_Policy_Accident'] = 'more than 30'
-        except ValueError:
+                data['VehiclePrice'] = '20000 to 29000'
+                print("   → Small claim tier: >30 days")
+
+            else:                                 # < ₹4.15 L — minor claim
+                data['PoliceReportFiled'] = 'No'
+                data['WitnessPresent'] = 'No'
+                data['Days_Policy_Claim'] = 'more than 30'
+                data['Days_Policy_Accident'] = 'more than 30'
+                data['VehiclePrice'] = 'less than 20000'
+                print("   → Minor claim tier: >30 days, no report")
+
+        except (ValueError, TypeError):
             print("⚠️ Invalid claim_amount value; skipping smart risk logic.")
 
-    for unwanted in ["CreatedAt", "UpdatedAt", "created_at", "updated_at", "createdAt", "updatedAt", "Email", "Username"]:
+    for unwanted in ["CreatedAt", "UpdatedAt", "created_at", "updated_at",
+                     "createdAt", "updatedAt", "Email", "Username"]:
         if unwanted in data:
             del data[unwanted]
 
