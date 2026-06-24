@@ -111,7 +111,9 @@ class ClaimDatabaseHandler:
                 fir_verification_score=fir_score * 100,
                 verification_reliability=combined_reliability * 100,
                 detailed_analysis=fraud_detection_result,
-                annotated_images=fraud_detection_result.get('annotated_images', [])
+                annotated_images=fraud_detection_result.get('annotated_images', []),
+                fraud_explanation=fraud_detection_result.get('fraud_explanation', {}),
+                fraud_summary=fraud_detection_result.get('fraud_explanation', {}).get('top_factor', '')
             )
 
             # === Save image files ===
@@ -415,6 +417,8 @@ class ClaimDatabaseHandler:
         """
         Serialize claim to dictionary for API response
         """
+        print(f"🔍 DEBUG: Serializing claim {claim.claim_number}")
+        print(f"🔍 DEBUG: fraud_explanation in model: {bool(claim.fraud_explanation)}")
         data = {
             'id': claim.id,
             'claim_number': claim.claim_number,
@@ -483,6 +487,8 @@ class ClaimDatabaseHandler:
         
         # Complete analysis
             'detailed_analysis': claim.detailed_analysis,
+            'fraud_explanation': claim.fraud_explanation,
+            'fraud_summary': claim.fraud_summary,
         }
     
     # Include individual images if requested

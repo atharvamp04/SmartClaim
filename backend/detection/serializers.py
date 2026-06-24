@@ -234,6 +234,8 @@ class ClaimDetailSerializer(serializers.ModelSerializer):
 
     # Computed fields
     assigned_surveyor_name = serializers.SerializerMethodField()
+    fraud_explanation = serializers.JSONField(default=dict)
+    fraud_summary = serializers.CharField(read_only=True, allow_null=True)
     final_claim_amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, read_only=True
     )
@@ -256,6 +258,7 @@ class ClaimDetailSerializer(serializers.ModelSerializer):
             # Fraud scores
             'confidence_score', 'tabular_fraud_probability',
             'image_fraud_probability', 'fusion_score',
+            'fraud_explanation', 'fraud_summary',
 
             # Damage info
             'overall_damage_severity', 'total_damage_areas',

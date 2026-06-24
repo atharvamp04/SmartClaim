@@ -427,6 +427,8 @@ def customer_my_claims(request):
                 "admin_notes": claim.admin_notes,
                 "rejection_reason": claim.rejection_reason,
                 "has_report": claim.status in ("Verified", "Rejected"),
+                "assigned_surveyor": claim.assigned_surveyor.username if claim.assigned_surveyor else None,
+                "assigned_surveyor_name": claim.assigned_surveyor.username if claim.assigned_surveyor else None,
             })
 
         return Response({
@@ -438,5 +440,69 @@ def customer_my_claims(request):
         logger.exception(f"customer_my_claims error: {e}")
         return Response(
             {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+# ============================================================
+# ENDPOINT 5: Resubmit Appeal
+# POST /api/detection/claims/<claim_id>/resubmit/
+# ============================================================
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def customer_resubmit_appeal(request, claim_id):
+    """
+    Allows a customer to appeal a Rejected claim.
+    Changes status back to Pending and clears rejection reasons.
+    """
+    try:
+        username = request.user.username
+
+        try:
+            ph = Policyholder.objects.get(username=username)
+        except Policyholder.DoesNotExist:
+            return Response({"error": "Policyholder not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            claim = Claim.objects.get(pk=claim_id, policyholder=ph)
+        except Claim.DoesNotExist:
+            return Response({"error": "Claim not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if claim.status != "Rejected":
+            return Response(
+                {"error": "Only rejected claims can be appealed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        old_status = claim.status
+        
+        # Reset claim to Pending state
+        claim.status = "Pending"
+        claim.rejection_reason = None
+        claim.reviewed_by = None
+        claim.reviewed_at = None
+        claim.admin_notes = None  # Clear previous internal notes regarding rejection
+        claim.save()
+
+        # Log history
+        ClaimHistory.objects.create(
+            claim=claim,
+            action="appealed",
+            old_status=old_status,
+            new_status="Pending",
+            performed_by=username,
+            notes="Customer resubmitted the claim for verification (Appeal).",
+        )
+
+        return Response(
+            {"message": "Claim successfully resubmitted for verification."},
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        logger.exception(f"customer_resubmit_appeal error: {e}")
+        return Response(
+            {"error": f"Internal server error: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

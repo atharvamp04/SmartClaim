@@ -7,9 +7,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { ArrowLeft, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { ArrowLeft, AlertTriangle, CheckCircle, Clock, MessageCircle, Calendar } from "lucide-react";
+import SurveyorChatAppointment from "@/components/SurveyorChatAppointment";
 
-const API_BASE = "http://127.0.0.1:8000/api/detection";
+const API_BASE = `/api/detection`;
 
 export default function ClaimDetail() {
   const router = useRouter();
@@ -157,6 +158,7 @@ export default function ClaimDetail() {
           <TabsList className="w-full justify-start border-b px-6 py-0">
             <TabsTrigger value="claim">Claim Information</TabsTrigger>
             <TabsTrigger value="policyholder">Policyholder</TabsTrigger>
+            <TabsTrigger value="communication">Communication</TabsTrigger>
             <TabsTrigger value="survey">Survey Report</TabsTrigger>
             <TabsTrigger value="analysis">Analysis</TabsTrigger>
           </TabsList>
@@ -244,6 +246,10 @@ export default function ClaimDetail() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="communication" className="p-6">
+            <SurveyorChatAppointment claim={claim} />
           </TabsContent>
 
           <TabsContent value="survey" className="p-6">

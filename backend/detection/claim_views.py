@@ -76,6 +76,10 @@ def get_claim_detail(request, claim_id):
             include_history=True
         )
         
+        # Explicit override to ensure these fields are present
+        claim_data['fraud_explanation'] = getattr(claim, 'fraud_explanation', {})
+        claim_data['fraud_summary'] = getattr(claim, 'fraud_summary', '')
+        
         return Response(claim_data)
         
     except Exception as e:

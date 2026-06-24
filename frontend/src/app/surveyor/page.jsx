@@ -18,7 +18,7 @@ import {
   AlertTriangle, Eye, FileText, Camera, Loader2
 } from "lucide-react";
 
-const API_BASE = "http://127.0.0.1:8000/api/detection";
+const API_BASE = `/api/detection`;
 
 export default function SurveyorDashboard() {
   const router = useRouter();
@@ -261,6 +261,46 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
   const [recommendation, setRecommendation] = useState("APPROVE");
   const [damageVerified, setDamageVerified] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [fieldPhotos, setFieldPhotos] = useState([]);
+  const [photoPreviews, setPhotoPreviews] = useState([]);
+  const [uploadError, setUploadError] = useState("");
+
+  const handlePhotoChange = (e) => {
+    const files = Array.from(e.target.files);
+    setUploadError("");
+
+    // Validate files
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) {
+        setUploadError(`"${file.name}" exceeds the 10 MB limit.`);
+        return;
+      }
+      if (!file.type.startsWith("image/")) {
+        setUploadError(`"${file.name}" is not a valid image file.`);
+        return;
+      }
+    }
+
+    if (fieldPhotos.length + files.length > 10) {
+      setUploadError("Maximum 10 field photos allowed.");
+      return;
+    }
+
+    setFieldPhotos((prev) => [...prev, ...files]);
+
+    // Generate previews
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) =>
+        setPhotoPreviews((prev) => [...prev, ev.target.result]);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removePhoto = (index) => {
+    setFieldPhotos((prev) => prev.filter((_, i) => i !== index));
+    setPhotoPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -269,30 +309,36 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
     try {
       const token = localStorage.getItem("access_token");
 
-      const payload = {
-        surveyor_notes: notes,
-        surveyor_recommendation: recommendation,
-        damage_verified: damageVerified
-      };
-
+      // Use FormData so we can send files + text together
+      const formData = new FormData();
+      formData.append("surveyor_notes", notes);
+      formData.append("surveyor_recommendation", recommendation);
+      formData.append("damage_verified", damageVerified);
       if (actualAmount) {
-        payload.surveyor_assessed_amount = parseFloat(actualAmount);
+        formData.append("surveyor_assessed_amount", parseFloat(actualAmount));
       }
+      // Attach each photo under the key "field_photos"
+      fieldPhotos.forEach((photo) => formData.append("field_photos", photo));
 
       const res = await fetch(
-        `http://127.0.0.1:8000/api/detection/surveyor/claims/${claim.id}/report/`,
+        `/api/detection/surveyor/claims/${claim.id}/report/`,
         {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json"
+            Authorization: `Bearer ${token}`,
+            // ⚠️ Do NOT set Content-Type here — browser will set multipart boundary automatically
           },
-          body: JSON.stringify(payload),
+          body: formData,
         }
       );
 
       if (res.ok) {
-        alert("✅ Survey report submitted successfully!");
+        const data = await res.json();
+        const photoMsg =
+          data.field_photos_saved > 0
+            ? ` ${data.field_photos_saved} photo(s) saved.`
+            : "";
+        alert(`✅ Survey report submitted successfully!${photoMsg}`);
         onSubmit();
         onClose();
       } else {
@@ -309,45 +355,57 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Submit Survey Report</DialogTitle>
           <DialogDescription>
-            Claim {claim.claim_number} - {claim.policyholder?.username}
+            Claim {claim.claim_number} — {claim.policyholder?.username}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 py-4">
           {/* Damage Verified */}
           <div>
-            <label className="block text-sm font-semibold mb-3">Damage Verified on Site?</label>
+            <label className="block text-sm font-semibold mb-3">
+              Damage Verified on Site?
+            </label>
             <div className="flex gap-4">
-              <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                style={{ borderColor: damageVerified ? '#2563eb' : '#d1d5db' }}>
+              <label
+                className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
+                style={{ borderColor: damageVerified ? "#2563eb" : "#d1d5db" }}
+              >
                 <input
                   type="radio"
                   checked={damageVerified}
                   onChange={() => setDamageVerified(true)}
                   className="w-4 h-4"
                 />
-                <span className="text-green-700 font-medium">✅ Yes — Damage Confirmed</span>
+                <span className="text-green-700 font-medium">
+                  ✅ Yes — Damage Confirmed
+                </span>
               </label>
-              <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                style={{ borderColor: !damageVerified ? '#2563eb' : '#d1d5db' }}>
+              <label
+                className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
+                style={{ borderColor: !damageVerified ? "#2563eb" : "#d1d5db" }}
+              >
                 <input
                   type="radio"
                   checked={!damageVerified}
                   onChange={() => setDamageVerified(false)}
                   className="w-4 h-4"
                 />
-                <span className="text-red-700 font-medium">❌ No — Damage Not Found</span>
+                <span className="text-red-700 font-medium">
+                  ❌ No — Damage Not Found
+                </span>
               </label>
             </div>
           </div>
 
           {/* Recommendation */}
           <div>
-            <label className="block text-sm font-semibold mb-2">Surveyor Recommendation *</label>
+            <label className="block text-sm font-semibold mb-2">
+              Surveyor Recommendation *
+            </label>
             <Select value={recommendation} onValueChange={setRecommendation}>
               <SelectTrigger>
                 <SelectValue />
@@ -355,7 +413,9 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
               <SelectContent>
                 <SelectItem value="APPROVE">✅ Approve Claim</SelectItem>
                 <SelectItem value="REJECT">❌ Reject Claim</SelectItem>
-                <SelectItem value="INVESTIGATE">🔍 Further Investigation Needed</SelectItem>
+                <SelectItem value="INVESTIGATE">
+                  🔍 Further Investigation Needed
+                </SelectItem>
                 <SelectItem value="PARTIAL">⚡ Partial Approval</SelectItem>
               </SelectContent>
             </Select>
@@ -363,7 +423,9 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
 
           {/* Assessed Amount */}
           <div>
-            <label className="block text-sm font-semibold mb-2">Surveyor Assessed Amount (₹)</label>
+            <label className="block text-sm font-semibold mb-2">
+              Surveyor Assessed Amount (₹)
+            </label>
             <input
               type="number"
               value={actualAmount}
@@ -371,25 +433,100 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
               placeholder={`AI estimated: ₹${claim.claim_amount?.toLocaleString()}`}
               className="w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
             />
-            <p className="text-xs text-gray-500 mt-1">Leave blank to keep original amount</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Leave blank to keep original amount
+            </p>
           </div>
 
           {/* Notes */}
           <div>
-            <label className="block text-sm font-semibold mb-2">Field Survey Notes *</label>
+            <label className="block text-sm font-semibold mb-2">
+              Field Survey Notes *
+            </label>
             <Textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              rows={5}
+              rows={4}
               required
               placeholder="Describe findings from field visit: actual damage observed, discrepancies with claim, vehicle condition, etc."
               className="w-full rounded-lg border p-3 focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
 
+          {/* Field Photos Upload */}
+          <div>
+            <label className="block text-sm font-semibold mb-2 flex items-center gap-2">
+              <Camera className="h-4 w-4 text-blue-600" />
+              Field Inspection Photos
+              <span className="text-xs font-normal text-gray-500">
+                (optional, max 10 images, 10 MB each)
+              </span>
+            </label>
+
+            {/* Upload Button */}
+            <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+              <div className="flex flex-col items-center gap-1">
+                <Camera className="h-6 w-6 text-gray-400" />
+                <span className="text-sm text-gray-500">
+                  Click to upload field photos
+                </span>
+                <span className="text-xs text-gray-400">
+                  JPG, PNG, WEBP supported
+                </span>
+              </div>
+              <input
+                id="field-photos-input"
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={handlePhotoChange}
+              />
+            </label>
+
+            {uploadError && (
+              <p className="text-sm text-red-600 mt-2">{uploadError}</p>
+            )}
+
+            {/* Photo Previews */}
+            {photoPreviews.length > 0 && (
+              <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-3">
+                {photoPreviews.map((preview, idx) => (
+                  <div key={idx} className="relative group rounded-lg overflow-hidden border bg-gray-50">
+                    <img
+                      src={preview}
+                      alt={`Field photo ${idx + 1}`}
+                      className="w-full h-20 object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(idx)}
+                      className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      ×
+                    </button>
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/40 text-white text-[10px] text-center py-0.5">
+                      Photo {idx + 1}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {fieldPhotos.length > 0 && (
+              <p className="text-xs text-blue-600 mt-2">
+                {fieldPhotos.length} photo{fieldPhotos.length !== 1 ? "s" : ""} ready to upload
+              </p>
+            )}
+          </div>
+
           {/* Buttons */}
-          <div className="flex gap-3 pt-4">
-            <Button type="submit" disabled={submitting} className="flex-1 bg-blue-600 hover:bg-blue-700">
+          <div className="flex gap-3 pt-2">
+            <Button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 bg-blue-600 hover:bg-blue-700"
+            >
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -402,7 +539,12 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
                 </>
               )}
             </Button>
-            <Button type="button" variant="outline" onClick={onClose} className="flex-1">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              className="flex-1"
+            >
               Cancel
             </Button>
           </div>
@@ -411,3 +553,4 @@ function SurveyReportModal({ claim, onClose, onSubmit }) {
     </Dialog>
   );
 }
+

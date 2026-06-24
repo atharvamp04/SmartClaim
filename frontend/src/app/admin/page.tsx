@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/sidebar";
 import { 
   Home, Clock, CheckCircle, XCircle, LogOut, AlertTriangle, 
-  TrendingUp, Search, Loader2, Eye, Menu
+  TrendingUp, Search, Loader2, Eye, Menu, DollarSign, Users,
+  FileText, BarChart3, PieChart, Activity
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,8 +29,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSidebar } from "@/components/ui/sidebar";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart as RechartsPieChart, Pie, Cell, LineChart, Line, AreaChart, Area, ResponsiveContainer, Legend } from "recharts";
 
-const API_BASE_URL = "http://127.0.0.1:8000/api/detection";
+const API_BASE_URL = `/api/detection`;
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -266,6 +270,74 @@ export default function AdminDashboard() {
 
   const stats = getStats();
 
+  // Chart data preparation functions
+  const getStatusDistributionData = () => [
+    { name: 'Verified', value: stats.verified, color: '#10b981' },
+    { name: 'Fraud', value: stats.fraud, color: '#ef4444' },
+    { name: 'Pending', value: stats.pending, color: '#f59e0b' },
+    { name: 'Rejected', value: stats.rejected, color: '#6b7280' },
+  ].filter(item => item.value > 0);
+
+  const getRiskDistributionData = () => {
+    const riskCounts = claims.reduce((acc: any, claim) => {
+      const risk = claim.risk_level || 'LOW';
+      acc[risk] = (acc[risk] || 0) + 1;
+      return acc;
+    }, {});
+
+    return [
+      { name: 'Low', value: riskCounts.LOW || 0, color: '#10b981' },
+      { name: 'Medium', value: riskCounts.MEDIUM || 0, color: '#f59e0b' },
+      { name: 'High', value: riskCounts.HIGH || 0, color: '#ef4444' },
+      { name: 'Critical', value: riskCounts.CRITICAL || 0, color: '#7c2d12' },
+    ].filter(item => item.value > 0);
+  };
+
+  const getMonthlyTrendData = () => {
+    const monthlyData = claims.reduce((acc: any, claim) => {
+      const date = new Date(claim.submitted_at);
+      const monthKey = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      
+      if (!acc[monthKey]) {
+        acc[monthKey] = { month: monthKey, total: 0, fraud: 0, verified: 0 };
+      }
+      
+      acc[monthKey].total++;
+      if (claim.status === 'Fraud') acc[monthKey].fraud++;
+      if (claim.status === 'Verified') acc[monthKey].verified++;
+      
+      return acc;
+    }, {});
+
+    return Object.values(monthlyData).slice(-6); // Last 6 months
+  };
+
+  const getConfidenceDistributionData = () => {
+    const ranges = [
+      { range: '0-25%', min: 0, max: 25, color: '#10b981' },
+      { range: '26-50%', min: 25, max: 50, color: '#84cc16' },
+      { range: '51-75%', min: 50, max: 75, color: '#f59e0b' },
+      { range: '76-100%', min: 75, max: 100, color: '#ef4444' },
+    ];
+
+    return ranges.map(range => ({
+      name: range.range,
+      value: claims.filter(c => {
+        const confidence = parseFloat(c.confidence_score || 0);
+        return confidence >= range.min && confidence <= range.max;
+      }).length,
+      color: range.color,
+    })).filter(item => item.value > 0);
+  };
+
+  const formatCurrency = (amount: number) => 
+    new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+
   const getRiskBadgeColor = (riskLevel: string) => {
     switch(riskLevel) {
       case "HIGH": return "bg-red-600 text-white";
@@ -288,11 +360,11 @@ export default function AdminDashboard() {
 
   return (
     <>
-      <Sidebar className="border-r bg-white">
+      <Sidebar className="border-r bg-white w-64">
         <SidebarContent className="flex flex-col h-full">
           <SidebarGroup className="flex-1">
             <SidebarGroupLabel className="text-xl font-bold px-6 py-5 text-black border-b">
-              ClaimAI Admin
+              SmartClaim Admin
             </SidebarGroupLabel>
             <SidebarGroupContent className="mt-4">
               <SidebarMenu>
@@ -429,115 +501,205 @@ export default function AdminDashboard() {
             <div className="h-full">
               {activeView === "dashboard" && (
                 <div className="p-4 lg:p-6 space-y-6">
+                  {/* Enhanced Statistics Cards */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-gray-600">Total Claims</p>
-                        <TrendingUp className="h-5 w-5 text-gray-400" />
+                        <TrendingUp className="h-5 w-5 text-blue-500" />
                       </div>
                       <p className="text-3xl font-bold text-gray-900">{stats.total}</p>
+                      <p className="text-xs text-gray-500 mt-1">All time</p>
                     </div>
 
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-gray-600">Verified</p>
                         <CheckCircle className="h-5 w-5 text-green-600" />
                       </div>
                       <p className="text-3xl font-bold text-green-600">{stats.verified}</p>
+                      <p className="text-xs text-gray-500 mt-1">{stats.total > 0 ? ((stats.verified / stats.total) * 100).toFixed(1) : 0}% approved</p>
                     </div>
 
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-gray-600">Fraud Detected</p>
                         <XCircle className="h-5 w-5 text-red-600" />
                       </div>
                       <p className="text-3xl font-bold text-red-600">{stats.fraud}</p>
+                      <p className="text-xs text-gray-500 mt-1">{stats.total > 0 ? ((stats.fraud / stats.total) * 100).toFixed(1) : 0}% fraud rate</p>
                     </div>
 
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm text-gray-600">Pending</p>
+                        <p className="text-sm text-gray-600">Pending Review</p>
                         <Clock className="h-5 w-5 text-yellow-600" />
                       </div>
                       <p className="text-3xl font-bold text-yellow-600">{stats.pending}</p>
+                      <p className="text-xs text-gray-500 mt-1">Need attention</p>
                     </div>
+                  </div>
 
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                  {/* Charts Section */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Status Distribution Pie Chart */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <PieChart className="h-5 w-5" />
+                          Claims Status Distribution
+                        </CardTitle>
+                        <CardDescription>Overview of claim statuses in the system</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ChartContainer config={{}} className="h-80">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RechartsPieChart>
+                              <Pie
+                                data={getStatusDistributionData()}
+                                cx="50%"
+                                cy="50%"
+                                labelLine={false}
+                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                outerRadius={80}
+                                fill="#8884d8"
+                                dataKey="value"
+                              >
+                                {getStatusDistributionData().map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <ChartTooltip content={<ChartTooltipContent />} />
+                            </RechartsPieChart>
+                          </ResponsiveContainer>
+                        </ChartContainer>
+                      </CardContent>
+                    </Card>
+
+                    {/* Risk Level Distribution Bar Chart */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <BarChart3 className="h-5 w-5" />
+                          Risk Level Distribution
+                        </CardTitle>
+                        <CardDescription>Claims categorized by risk level</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ChartContainer config={{}} className="h-80">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={getRiskDistributionData()}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="name" />
+                              <YAxis />
+                              <ChartTooltip content={<ChartTooltipContent />} />
+                              <Bar dataKey="value" fill="#8884d8">
+                                {getRiskDistributionData().map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </ChartContainer>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Monthly Trend and Confidence Distribution */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Monthly Claims Trend */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Activity className="h-5 w-5" />
+                          Monthly Claims Trend
+                        </CardTitle>
+                        <CardDescription>Claims submitted over the last 6 months</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ChartContainer config={{}} className="h-80">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={getMonthlyTrendData()}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="month" />
+                              <YAxis />
+                              <ChartTooltip content={<ChartTooltipContent />} />
+                              <Legend />
+                              <Line type="monotone" dataKey="total" stroke="#3b82f6" strokeWidth={2} name="Total Claims" />
+                              <Line type="monotone" dataKey="fraud" stroke="#ef4444" strokeWidth={2} name="Fraud" />
+                              <Line type="monotone" dataKey="verified" stroke="#10b981" strokeWidth={2} name="Verified" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </ChartContainer>
+                      </CardContent>
+                    </Card>
+
+                    {/* Confidence Score Distribution */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <BarChart3 className="h-5 w-5" />
+                          Confidence Score Distribution
+                        </CardTitle>
+                        <CardDescription>Fraud detection confidence ranges</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <ChartContainer config={{}} className="h-80">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={getConfidenceDistributionData()}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="name" />
+                              <YAxis />
+                              <ChartTooltip content={<ChartTooltipContent />} />
+                              <Bar dataKey="value" fill="#8884d8">
+                                {getConfidenceDistributionData().map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </ChartContainer>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Additional Statistics Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-gray-600">High Risk</p>
                         <AlertTriangle className="h-5 w-5 text-orange-600" />
                       </div>
                       <p className="text-3xl font-bold text-orange-600">{stats.highRisk}</p>
+                      <p className="text-xs text-gray-500 mt-1">Requires review</p>
                     </div>
 
-                    <div className="bg-white p-6 rounded-lg border shadow-sm">
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-gray-600">Rejected</p>
                         <XCircle className="h-5 w-5 text-gray-600" />
                       </div>
                       <p className="text-3xl font-bold text-gray-900">{stats.rejected}</p>
+                      <p className="text-xs text-gray-500 mt-1">Not approved</p>
                     </div>
 
-                    {stats.avgConfidence > 0 && (
-                      <div className="bg-white p-6 rounded-lg border shadow-sm">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-sm text-gray-600">Avg Confidence</p>
-                          <TrendingUp className="h-5 w-5 text-blue-600" />
-                        </div>
-                        <p className="text-3xl font-bold text-blue-600">
-                          {stats.avgConfidence.toFixed(1)}%
-                        </p>
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm text-gray-600">Avg Confidence</p>
+                        <Activity className="h-5 w-5 text-purple-600" />
                       </div>
-                    )}
+                      <p className="text-3xl font-bold text-purple-600">{stats.avgConfidence.toFixed(1)}%</p>
+                      <p className="text-xs text-gray-500 mt-1">Detection accuracy</p>
+                    </div>
 
-                    {stats.avgAmount > 0 && (
-                      <div className="bg-white p-6 rounded-lg border shadow-sm">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-sm text-gray-600">Avg Amount</p>
-                          <TrendingUp className="h-5 w-5 text-purple-600" />
-                        </div>
-                        <p className="text-2xl font-bold text-purple-600">
-                          ₹{stats.avgAmount.toFixed(0)}
-                        </p>
+                    <div className="bg-white p-6 rounded-lg border shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm text-gray-600">Avg Amount</p>
+                        <DollarSign className="h-5 w-5 text-green-600" />
                       </div>
-                    )}
-                  </div>
-
-                  <div className="bg-white p-6 rounded-lg border shadow-sm">
-                    <h3 className="text-lg font-semibold mb-3 text-gray-800">Summary</h3>
-                    <p className="text-gray-600 mb-3 text-sm lg:text-base">
-                      Out of <strong>{stats.total}</strong> total claims, <strong>{stats.verified}</strong> verified, 
-                      <strong> {stats.fraud}</strong> fraud, <strong>{stats.pending}</strong> pending,
-                      and <strong>{stats.rejected}</strong> rejected.
-                    </p>
-                    {stats.total > 0 && (
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t">
-                        <div>
-                          <p className="text-sm text-gray-600">Success Rate</p>
-                          <p className="text-xl font-bold text-green-600">
-                            {Math.round((stats.verified / stats.total) * 100)}%
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Fraud Rate</p>
-                          <p className="text-xl font-bold text-red-600">
-                            {Math.round((stats.fraud / stats.total) * 100)}%
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">Pending Rate</p>
-                          <p className="text-xl font-bold text-yellow-600">
-                            {Math.round((stats.pending / stats.total) * 100)}%
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-600">High Risk</p>
-                          <p className="text-xl font-bold text-orange-600">
-                            {Math.round((stats.highRisk / stats.total) * 100)}%
-                          </p>
-                        </div>
-                      </div>
-                    )}
+                      <p className="text-3xl font-bold text-green-600">{formatCurrency(stats.avgAmount)}</p>
+                      <p className="text-xs text-gray-500 mt-1">Per claim</p>
+                    </div>
                   </div>
                 </div>
               )}

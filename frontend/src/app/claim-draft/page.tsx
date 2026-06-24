@@ -86,7 +86,7 @@ export default function ClaimDraftPage() {
 
       imageFiles.forEach((file) => data.append("car_images", file));
 
-      const res = await fetch("http://127.0.0.1:8000/api/detection/claims/draft/", {
+      const res = await fetch(`/api/detection/claims/draft/`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: data,

@@ -8,6 +8,7 @@ from .views import (
     RegisterView,
     protected_view,
     login_with_role,          # NEW
+    get_customer_claims,      # NEW
 
     # Policyholder Views
     PolicyholderCreateView,
@@ -21,6 +22,19 @@ from .views import (
     admin_assign_surveyor,
     list_surveyors,
     create_surveyor,
+
+    # Chat and Appointment System    NEW
+    get_chat_messages,
+    send_chat_message,
+    mark_messages_read,
+    get_appointments,
+    create_appointment,
+    get_appointment_detail,
+    update_appointment,
+    confirm_appointment,
+    cancel_appointment,
+    get_surveyor_availability,
+    set_surveyor_availability,
 
     # Health Check
     health_check,
@@ -61,6 +75,7 @@ from .report_views import (
     download_claim_pdf,
     customer_notifications,
     customer_my_claims,
+    customer_resubmit_appeal,
 )
 
 urlpatterns = [
@@ -121,6 +136,13 @@ urlpatterns = [
     path('claims/info/', claim_api_info, name='claim-api-info'),
 
     # ==========================================
+    # CUSTOMER ENDPOINTS                        NEW
+    # ==========================================
+
+    # Customer notifications
+    path('customer/notifications/', customer_notifications, name='customer-notifications'),
+
+    # ==========================================
     # SURVEYOR ENDPOINTS                        NEW
     # ==========================================
 
@@ -141,6 +163,27 @@ urlpatterns = [
     path('admin/surveyors/create/', create_surveyor, name='create-surveyor'),
 
     # ==========================================
+    # CHAT AND APPOINTMENT SYSTEM              NEW
+    # ==========================================
+
+    # Chat endpoints
+    path('chat/<int:claim_id>/messages/', get_chat_messages, name='get-chat-messages'),
+    path('chat/<int:claim_id>/send/', send_chat_message, name='send-chat-message'),
+    path('chat/<int:claim_id>/mark-read/', mark_messages_read, name='mark-messages-read'),
+
+    # Appointment endpoints
+    path('appointments/', get_appointments, name='get-appointments'),
+    path('appointments/create/', create_appointment, name='create-appointment'),
+    path('appointments/<int:appointment_id>/', get_appointment_detail, name='get-appointment-detail'),
+    path('appointments/<int:appointment_id>/update/', update_appointment, name='update-appointment'),
+    path('appointments/<int:appointment_id>/confirm/', confirm_appointment, name='confirm-appointment'),
+    path('appointments/<int:appointment_id>/cancel/', cancel_appointment, name='cancel-appointment'),
+
+    # Surveyor availability
+    path('surveyor/availability/', get_surveyor_availability, name='get-surveyor-availability'),
+    path('surveyor/availability/set/', set_surveyor_availability, name='set-surveyor-availability'),
+
+    # ==========================================
     # ADMIN FINAL DECISION + PDF REPORT         NEW
     # ==========================================
 
@@ -157,8 +200,8 @@ urlpatterns = [
     # Get all claims for logged-in customer (with status, rejection reason, etc.)
     path('customer/claims/', customer_my_claims, name='customer-my-claims'),
 
-    # Get notifications for logged-in customer
-    path('customer/notifications/', customer_notifications, name='customer-notifications'),
+    # Allow customers to resubmit appeal for verification
+    path('claims/<int:claim_id>/resubmit/', customer_resubmit_appeal, name='customer-resubmit-appeal'),
 
     # ==========================================
     # SYSTEM HEALTH CHECK

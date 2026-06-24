@@ -3,37 +3,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  Button,
-} from "@/components/ui/button";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import {
-  Camera,
-  Brain,
-  CheckCircle2,
-  Shield,
-  FileSearch,
-  Users,
-  Eye,
-  ArrowRight,
-  Menu,
-  BarChart3,
-  Sparkles,
-  Lock,
-  Building2,
-} from "lucide-react";
+import { Shield, ArrowRight, Camera, Brain, Zap, Eye, BarChart3, ChevronDown, Menu, CheckCircle, AlertTriangle, TrendingUp, Layers } from "lucide-react";
 
-// Animated counter hook
 function useCountUp(end: number, duration: number, trigger: boolean) {
   const [count, setCount] = useState(0);
   useEffect(() => {
@@ -42,22 +13,38 @@ function useCountUp(end: number, duration: number, trigger: boolean) {
     const increment = end / (duration / 16);
     const timer = setInterval(() => {
       start += increment;
-      if (start >= end) {
-        setCount(end);
-        clearInterval(timer);
-      } else {
-        setCount(Math.floor(start));
-      }
+      if (start >= end) { setCount(end); clearInterval(timer); }
+      else setCount(Math.floor(start));
     }, 16);
     return () => clearInterval(timer);
   }, [end, duration, trigger]);
   return count;
 }
 
-export default function HomePage() {
+function useInView(threshold = 0.2) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) setInView(true); }, { threshold });
+    if (ref.current) obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, []);
+  return { ref, inView };
+}
+
+export default function LandingPage() {
   const router = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const statsRef = useRef<HTMLDivElement>(null);
   const [statsInView, setStatsInView] = useState(false);
+
+  const { ref: problemRef, inView: problemInView } = useInView();
+  const { ref: yoloRef, inView: yoloInView } = useInView();
+  const { ref: cnnRef, inView: cnnInView } = useInView();
+  const { ref: xgbRef, inView: xgbInView } = useInView();
+  const { ref: shapRef, inView: shapInView } = useInView();
+  const { ref: fusionRef, inView: fusionInView } = useInView();
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
@@ -66,539 +53,637 @@ export default function HomePage() {
       if (role === "admin") router.push("/admin");
       else if (role === "surveyor") router.push("/surveyor");
       else router.push("/customer");
-      return;
     }
   }, [router]);
 
   useEffect(() => {
-    const obs = new IntersectionObserver(
-      ([e]) => setStatsInView(e.isIntersecting),
-      { threshold: 0.3 }
-    );
+    const onScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(([e]) => setStatsInView(e.isIntersecting), { threshold: 0.3 });
     if (statsRef.current) obs.observe(statsRef.current);
     return () => obs.disconnect();
   }, []);
 
-  const claimsProcessed = useCountUp(10000, 1500, statsInView);
-  const avgTime = useCountUp(48, 1200, statsInView);
-  const fraudAccuracy = useCountUp(96, 1500, statsInView);
-  const policyholders = useCountUp(50000, 1800, statsInView);
-
-  const navLinks = [
-    { text: "How it Works", href: "#how-it-works" },
-    { text: "Features", href: "#features" },
-    { text: "Security", href: "#security" },
-    { text: "FAQ", href: "#faq" },
-  ];
-
-  const sectionWrapper = "w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8";
+  const claims    = useCountUp(10000, 1500, statsInView);
+  const accuracy  = useCountUp(96, 1200, statsInView);
+  const saved     = useCountUp(45000, 1800, statsInView);
+  const speed     = useCountUp(10, 1000, statsInView);
 
   return (
-    <div className="bg-gray-50 text-gray-900 min-h-screen w-full antialiased">
-      {/* Navbar */}
-      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/95 backdrop-blur-md shadow-sm">
-        <div className={`${sectionWrapper} flex h-16 items-center justify-between`}>
-          <Link href="/" className="flex items-center gap-2.5 font-bold text-gray-900 hover:text-gray-900 transition-colors">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-black text-white">
-              <Shield className="h-5 w-5" />
+    <div className="bg-[#0a0a0a] text-white min-h-screen w-full" style={{ fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif" }}>
+
+      {/* ── NAV ── */}
+      <header className={`fixed top-0 w-full z-50 transition-all duration-300 ${scrolled ? "bg-[#0a0a0a]/95 border-b border-white/10 backdrop-blur-md" : ""}`}>
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+              <Shield className="h-4 w-4 text-black" />
             </div>
-            SmartClaim
-          </Link>
-          <nav className="hidden md:flex items-center gap-8">
-            {navLinks.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                {link.text}
-              </a>
-            ))}
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button asChild variant="ghost" size="sm" className="text-gray-600 hover:text-gray-900">
-              <Link href="/login">Login</Link>
-            </Button>
-            <Button asChild size="sm" className="bg-black hover:bg-gray-800 text-white shadow-md">
-              <Link href="/register">Get Started</Link>
-            </Button>
-            <Sheet>
-              <SheetTrigger asChild className="md:hidden">
-                <Button variant="ghost" size="icon">
-                  <Menu className="h-5 w-5" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="w-[280px]">
-                <nav className="flex flex-col gap-4 mt-8">
-                  {navLinks.map((link) => (
-                    <a key={link.href} href={link.href} className="text-lg">
-                      {link.text}
-                    </a>
-                  ))}
-                  <Separator />
-                  <Button asChild variant="ghost" className="justify-start">
-                    <Link href="/login">Login</Link>
-                  </Button>
-                  <Button asChild className="justify-start">
-                    <Link href="/register">Get Started</Link>
-                  </Button>
-                </nav>
-              </SheetContent>
-            </Sheet>
+            <span className="font-bold text-white text-lg tracking-tight">SmartClaim AI</span>
           </div>
+          <nav className="hidden md:flex items-center gap-8 text-sm text-white/60">
+            <a href="#problem" className="hover:text-white transition-colors">Problem</a>
+            <a href="#how" className="hover:text-white transition-colors">How It Works</a>
+            <a href="#models" className="hover:text-white transition-colors">AI Models</a>
+            <a href="#explainability" className="hover:text-white transition-colors">Explainability</a>
+            <a href="#impact" className="hover:text-white transition-colors">Impact</a>
+          </nav>
+          <div className="hidden md:flex items-center gap-3">
+            <Link href="/login" className="text-sm text-white/60 hover:text-white transition-colors px-4 py-2">Login</Link>
+            <Link href="/register" className="text-sm bg-white text-black font-semibold px-5 py-2 rounded-lg hover:bg-gray-100 transition-colors">Get Started</Link>
+          </div>
+          <button className="md:hidden text-white" onClick={() => setMenuOpen(!menuOpen)}>
+            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
         </div>
+        {menuOpen && (
+          <div className="md:hidden bg-[#0a0a0a] border-t border-white/10 px-6 py-6 space-y-4">
+            {["problem","how","models","explainability","impact"].map(s => (
+              <a key={s} href={`#${s}`} onClick={() => setMenuOpen(false)} className="block text-white/70 hover:text-white capitalize">{s}</a>
+            ))}
+            <div className="pt-4 flex gap-3">
+              <Link href="/login" className="flex-1 text-center text-sm border border-white/20 text-white py-2 rounded-lg">Login</Link>
+              <Link href="/register" className="flex-1 text-center text-sm bg-white text-black font-semibold py-2 rounded-lg">Get Started</Link>
+            </div>
+          </div>
+        )}
       </header>
 
-      {/* Hero */}
-      <section className="relative bg-black text-white py-28 lg:py-36 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(255,255,255,0.05),transparent_50%)]" />
-        <div className="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'0.03\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')] opacity-40" />
-        <div className={`${sectionWrapper} relative`}>
-          <div className="max-w-3xl">
-            <Badge className="mb-6 bg-white/20 text-gray-300 border-white/20">
-              AI-Powered • Settled in Hours
-            </Badge>
-            <h1 className="text-4xl md:text-6xl lg:text-7xl font-extrabold tracking-tight mb-6 leading-[1.1]">
-              Insurance Claims.
-              <br />
-              <span className="bg-gradient-to-r from-gray-300 to-gray-400 bg-clip-text text-transparent">Settled in Hours.</span>
-            </h1>
-            <p className="text-lg md:text-xl text-gray-300 mb-6 max-w-xl leading-relaxed">
-              Submit photos, get an instant AI assessment, and track your claim through every step. No paperwork, no waiting.
+      {/* ── HERO ── */}
+      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 text-center overflow-hidden">
+        {/* Background grid */}
+        <div className="absolute inset-0" style={{
+          backgroundImage: "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)",
+          backgroundSize: "60px 60px"
+        }} />
+        {/* Glow */}
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full" style={{ background: "radial-gradient(circle, rgba(255,255,255,0.04) 0%, transparent 70%)" }} />
+
+        <div className="relative max-w-4xl mx-auto">
+          <div className="inline-flex items-center gap-2 border border-white/15 rounded-full px-4 py-1.5 text-xs text-white/50 mb-8 bg-white/5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            AI-Powered · Explainable · Automated
+          </div>
+
+          <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tighter leading-[0.9] mb-6">
+            Insurance Claims<br />
+            <span style={{ WebkitTextStroke: "1px rgba(255,255,255,0.3)", color: "transparent" }}>
+              Decided by AI.
+            </span><br />
+            <span className="text-white">Explained to Humans.</span>
+          </h1>
+
+          <p className="text-white/50 text-lg md:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
+            SmartClaim AI uses YOLO, CNN, and XGBoost to detect damage, calculate amounts, and score fraud — then explains every decision with SHAP.
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Link href="/register" className="inline-flex items-center gap-2 bg-white text-black font-bold px-8 py-4 rounded-xl hover:bg-gray-100 transition-all text-sm">
+              File a Claim <ArrowRight className="h-4 w-4" />
+            </Link>
+            <a href="#problem" className="inline-flex items-center gap-2 border border-white/20 text-white/70 hover:text-white hover:border-white/40 font-medium px-8 py-4 rounded-xl transition-all text-sm">
+              See How It Works <ChevronDown className="h-4 w-4" />
+            </a>
+          </div>
+        </div>
+
+        {/* Scroll indicator */}
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-white/30 text-xs animate-bounce">
+          <span>scroll to explore</span>
+          <ChevronDown className="h-4 w-4" />
+        </div>
+      </section>
+
+      {/* ── PROBLEM ── */}
+      <section id="problem" className="py-32 px-6">
+        <div ref={problemRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${problemInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="text-xs font-bold tracking-widest text-white/30 uppercase mb-4">The Problem</div>
+            <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-16 leading-tight">
+              ₹45,000 Crores lost<br />
+              <span className="text-white/30">to fraud every year.</span>
+            </h2>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-px bg-white/5 rounded-2xl overflow-hidden">
+            {[
+              { num: "3 Weeks", label: "Average claim settlement time", sub: "Traditional process" },
+              { num: "Opaque", label: "Decisions with no explanation", sub: "Adjuster says no. No reason given." },
+              { num: "Biased", label: "Human subjectivity in assessment", sub: "Same damage, different adjusters, different amounts." },
+            ].map(({ num, label, sub }) => (
+              <div key={num} className="bg-[#111] p-8 md:p-10">
+                <p className="text-3xl md:text-4xl font-black text-red-400 mb-3">{num}</p>
+                <p className="text-white font-semibold mb-2">{label}</p>
+                <p className="text-white/40 text-sm">{sub}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-16 p-8 md:p-12 rounded-2xl border border-white/10 bg-white/[0.02]">
+            <p className="text-2xl md:text-3xl font-bold text-white/80 leading-relaxed">
+              "The system is broken. Claims take weeks. Fraud slips through. Honest customers are penalised. There is no transparency."
             </p>
-            <p className="text-gray-400 mb-10 max-w-xl">
-              Trusted by leading insurers. Built with computer vision and ML for accurate damage assessment and fraud detection.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Button asChild size="lg" className="bg-white text-gray-900 hover:bg-gray-100 shadow-xl shadow-black/20 font-semibold h-12 px-8 rounded-xl">
-                <Link href="/register">File a Claim</Link>
-              </Button>
-              <Button asChild size="lg" variant="outline" className="border-gray-500/50 text-gray-200 hover:bg-white/10 hover:border-gray-400 h-12 px-8 rounded-xl font-medium">
-                <Link href="/login">Admin Login</Link>
-              </Button>
+            <p className="text-white/30 mt-4 text-sm">— The problem SmartClaim AI solves</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── HOW IT WORKS ── */}
+      <section id="how" className="py-32 px-6 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-xs font-bold tracking-widest text-white/30 uppercase mb-4">The Solution</div>
+          <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-6">Photo in. Decision out.<br /><span className="text-white/30">In under 10 seconds.</span></h2>
+          <p className="text-white/50 text-lg mb-20 max-w-2xl">Three AI models run simultaneously the moment photos are uploaded. No waiting. No subjectivity.</p>
+
+          {/* Pipeline visual */}
+          <div className="relative">
+            <div className="hidden md:block absolute top-12 left-[10%] right-[10%] h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+            <div className="grid md:grid-cols-4 gap-6">
+              {[
+                { step: "01", icon: Camera, label: "Upload Photos", desc: "Customer uploads damage photos from phone or desktop. Multiple angles supported.", color: "text-blue-400" },
+                { step: "02", icon: Brain, label: "3-Model AI Pipeline", desc: "YOLO + CNN + XGBoost run in parallel. Damage detected, severity scored, fraud assessed.", color: "text-violet-400" },
+                { step: "03", icon: Eye, label: "SHAP Explanation", desc: "Every decision explained. Which features drove the fraud score. Why the amount is what it is.", color: "text-emerald-400" },
+                { step: "04", icon: CheckCircle, label: "Instant Decision", desc: "Claim verified, flagged, or rejected — with a full PDF report the customer can download.", color: "text-amber-400" },
+              ].map(({ step, icon: Icon, label, desc, color }) => (
+                <div key={step} className="relative bg-[#111] border border-white/8 rounded-2xl p-6 hover:border-white/20 transition-colors">
+                  <div className="text-xs font-black text-white/20 mb-4">{step}</div>
+                  <Icon className={`h-6 w-6 ${color} mb-4`} />
+                  <p className="font-bold text-white mb-2">{label}</p>
+                  <p className="text-white/40 text-sm leading-relaxed">{desc}</p>
+                </div>
+              ))}
             </div>
           </div>
-          {/* Hero visual - mock claim card */}
-          <div className="mt-16 lg:mt-0 lg:absolute lg:right-0 lg:top-1/2 lg:-translate-y-1/2 lg:w-[380px]">
-            <Card className="w-full bg-white/5 border border-white/10 backdrop-blur-sm shadow-2xl overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-              <CardHeader className="pb-2 relative">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-medium text-gray-300">Claim Status</CardTitle>
-                  <Badge className="bg-white/20 text-gray-300 border-white/30">Verified</Badge>
+        </div>
+      </section>
+
+      {/* ── MODEL 1: YOLO ── */}
+      <section id="models" className="py-32 px-6 border-t border-white/5">
+        <div ref={yoloRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${yoloInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="grid md:grid-cols-2 gap-16 items-center">
+              <div>
+                <div className="inline-flex items-center gap-2 text-xs font-bold tracking-widest text-blue-400 uppercase mb-6 border border-blue-400/30 rounded-full px-4 py-1.5">
+                  Model 1 — Computer Vision
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-5 relative">
-                <div>
-                  <p className="text-3xl font-bold text-white">₹45,000</p>
-                  <p className="text-xs text-gray-400">Estimated amount</p>
+                <h2 className="text-4xl md:text-5xl font-black tracking-tight mb-6 leading-tight">
+                  YOLOv8<br /><span className="text-white/30">sees what the eye misses.</span>
+                </h2>
+                <p className="text-white/50 text-lg leading-relaxed mb-8">
+                  You Only Look Once — real-time object detection trained on thousands of vehicle damage images. Identifies every damaged part in milliseconds.
+                </p>
+                <div className="space-y-4">
+                  {[
+                    "Detects bumpers, hoods, doors, lights, windshields — individually",
+                    "Draws bounding boxes around every damage region",
+                    "Each detection has a confidence score",
+                    "Works across multiple photos simultaneously",
+                  ].map(item => (
+                    <div key={item} className="flex items-start gap-3">
+                      <div className="w-5 h-5 rounded-full bg-blue-400/20 border border-blue-400/40 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      </div>
+                      <p className="text-white/60 text-sm">{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* YOLO visual */}
+              <div className="bg-[#111] border border-white/10 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-white/5 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-red-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-amber-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-green-500/60" />
+                  <span className="text-xs text-white/30 ml-2">YOLO Detection Output</span>
+                </div>
+                <div className="p-6 space-y-3">
+                  {[
+                    { part: "Front Bumper", conf: 94, damage: "Dent + Crack", color: "bg-red-500" },
+                    { part: "Hood",         conf: 87, damage: "Paint Scratch", color: "bg-orange-500" },
+                    { part: "Headlight L",  conf: 91, damage: "Broken",       color: "bg-red-600" },
+                    { part: "Fender",       conf: 78, damage: "Dent",         color: "bg-amber-500" },
+                    { part: "Windshield",   conf: 62, damage: "Minor Crack",  color: "bg-yellow-500" },
+                  ].map(({ part, conf, damage, color }) => (
+                    <div key={part} className="flex items-center gap-3 p-3 bg-white/[0.03] rounded-lg border border-white/5">
+                      <div className={`w-2 h-8 rounded-full ${color} opacity-80 flex-shrink-0`} />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-sm font-semibold text-white">{part}</p>
+                          <span className="text-xs text-white/40 font-mono">{conf}%</span>
+                        </div>
+                        <p className="text-xs text-white/40">{damage}</p>
+                        <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
+                          <div className={`h-full ${color} rounded-full opacity-70`} style={{ width: `${conf}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="pt-2 border-t border-white/5 flex justify-between text-xs text-white/30">
+                    <span>5 parts detected</span>
+                    <span className="text-blue-400">Base amount: ₹52,400</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── MODEL 2: CNN ── */}
+      <section className="py-32 px-6 border-t border-white/5 bg-[#0d0d0d]">
+        <div ref={cnnRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${cnnInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="grid md:grid-cols-2 gap-16 items-center">
+              {/* CNN visual */}
+              <div className="order-2 md:order-1 bg-[#111] border border-white/10 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-white/5 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-red-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-amber-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-green-500/60" />
+                  <span className="text-xs text-white/30 ml-2">CNN Damage Analysis</span>
+                </div>
+                <div className="p-6">
+                  <div className="space-y-3 mb-6">
+                    {[
+                      { label: "Image 1", pct: 34, severity: "MODERATE", c: "bg-orange-500" },
+                      { label: "Image 2", pct: 67, severity: "SEVERE",   c: "bg-red-500" },
+                      { label: "Image 3", pct: 18, severity: "MINOR",    c: "bg-yellow-500" },
+                      { label: "Image 4", pct: 52, severity: "MODERATE", c: "bg-orange-400" },
+                    ].map(({ label, pct, severity, c }) => (
+                      <div key={label} className="p-3 bg-white/[0.03] rounded-lg border border-white/5">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-sm text-white/70">{label}</span>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${c} text-white bg-opacity-20`} style={{ backgroundColor: "rgba(255,255,255,0.1)" }}>{severity}</span>
+                        </div>
+                        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div className={`h-full ${c} rounded-full`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="flex justify-between mt-1">
+                          <span className="text-xs text-white/30">Damage area</span>
+                          <span className="text-xs text-white/50 font-mono">{pct}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-4 bg-violet-500/10 border border-violet-500/20 rounded-xl">
+                    <p className="text-xs text-violet-400 font-semibold mb-1">CNN Multiplier Applied</p>
+                    <p className="text-2xl font-black text-white">1.67×</p>
+                    <p className="text-xs text-white/40 mt-1">Base ₹52,400 → Final ₹87,500</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="order-1 md:order-2">
+                <div className="inline-flex items-center gap-2 text-xs font-bold tracking-widest text-violet-400 uppercase mb-6 border border-violet-400/30 rounded-full px-4 py-1.5">
+                  Model 2 — Damage Severity
+                </div>
+                <h2 className="text-4xl md:text-5xl font-black tracking-tight mb-6 leading-tight">
+                  CNN measures<br /><span className="text-white/30">how bad it really is.</span>
+                </h2>
+                <p className="text-white/50 text-lg leading-relaxed mb-8">
+                  YOLO tells us what is damaged. The Convolutional Neural Network tells us how severely. It reads pixel-level damage patterns across the entire image.
+                </p>
+                <div className="space-y-4">
+                  {[
+                    "Scans every pixel for damage patterns",
+                    "Assigns damage percentage per image",
+                    "Classifies severity: Minor, Moderate, Severe",
+                    "Generates a multiplier applied to YOLO base amount",
+                    "Produces annotated overlay images as evidence",
+                  ].map(item => (
+                    <div key={item} className="flex items-start gap-3">
+                      <div className="w-5 h-5 rounded-full bg-violet-400/20 border border-violet-400/40 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+                      </div>
+                      <p className="text-white/60 text-sm">{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── MODEL 3: XGBOOST ── */}
+      <section className="py-32 px-6 border-t border-white/5">
+        <div ref={xgbRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${xgbInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="grid md:grid-cols-2 gap-16 items-center">
+              <div>
+                <div className="inline-flex items-center gap-2 text-xs font-bold tracking-widest text-red-400 uppercase mb-6 border border-red-400/30 rounded-full px-4 py-1.5">
+                  Model 3 — Fraud Detection
+                </div>
+                <h2 className="text-4xl md:text-5xl font-black tracking-tight mb-6 leading-tight">
+                  XGBoost scores<br /><span className="text-white/30">73 fraud signals.</span>
+                </h2>
+                <p className="text-white/50 text-lg leading-relaxed mb-8">
+                  Gradient boosted decision trees analyse behavioural, temporal, and policy-level patterns to generate a fraud probability score in real time.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  {[
+                    { signal: "Days since policy start", flag: true },
+                    { signal: "Previous claims count", flag: true },
+                    { signal: "Police report filed", flag: false },
+                    { signal: "Witness present", flag: false },
+                    { signal: "Agent type", flag: true },
+                    { signal: "Accident area", flag: false },
+                    { signal: "Claim day of week", flag: false },
+                    { signal: "Address change recency", flag: true },
+                  ].map(({ signal, flag }) => (
+                    <div key={signal} className={`p-3 rounded-lg border text-xs flex items-center gap-2 ${flag ? "border-red-500/30 bg-red-500/5" : "border-white/10 bg-white/[0.02]"}`}>
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${flag ? "bg-red-400" : "bg-green-400"}`} />
+                      <span className={flag ? "text-red-300" : "text-white/40"}>{signal}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* XGBoost visual */}
+              <div className="bg-[#111] border border-white/10 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-white/5 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-red-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-amber-500/60" />
+                  <div className="w-2 h-2 rounded-full bg-green-500/60" />
+                  <span className="text-xs text-white/30 ml-2">XGBoost Fraud Score</span>
+                </div>
+                <div className="p-6">
+                  {/* Gauge */}
+                  <div className="flex flex-col items-center mb-6">
+                    <div className="relative w-40 h-20 overflow-hidden mb-4">
+                      <div className="absolute inset-0 rounded-t-full border-8 border-white/5" />
+                      <div className="absolute inset-0 rounded-t-full border-8 border-transparent border-t-red-500 border-r-red-500" style={{ transform: "rotate(25deg)", transformOrigin: "center bottom" }} />
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-16 bg-white rounded-full origin-bottom" style={{ transform: "rotate(30deg)" }} />
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-[#111] border-2 border-white/30" />
+                    </div>
+                    <p className="text-5xl font-black text-white">73<span className="text-2xl text-white/40">%</span></p>
+                    <p className="text-xs text-white/30 mt-1">Fraud Probability</p>
+                    <div className="mt-3 px-4 py-1.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-400 text-xs font-bold">HIGH RISK</div>
+                  </div>
+                  {/* Score breakdown */}
+                  <div className="space-y-2 border-t border-white/5 pt-4">
+                    {[
+                      { label: "Tabular (XGBoost)",  val: 71, c: "bg-red-500" },
+                      { label: "Image (CNN)",         val: 68, c: "bg-orange-500" },
+                      { label: "Fusion Score",        val: 73, c: "bg-red-600" },
+                    ].map(({ label, val, c }) => (
+                      <div key={label} className="flex items-center gap-3">
+                        <span className="text-xs text-white/40 w-36 flex-shrink-0">{label}</span>
+                        <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                          <div className={`h-full ${c} rounded-full`} style={{ width: `${val}%` }} />
+                        </div>
+                        <span className="text-xs font-mono text-white/50 w-8 text-right">{val}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── EXPLAINABILITY ── */}
+      <section id="explainability" className="py-32 px-6 border-t border-white/5 bg-[#0d0d0d]">
+        <div ref={shapRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${shapInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="text-center mb-16">
+              <div className="inline-flex items-center gap-2 text-xs font-bold tracking-widest text-emerald-400 uppercase mb-6 border border-emerald-400/30 rounded-full px-4 py-1.5">
+                What Makes Us Different
+              </div>
+              <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-6">
+                Not just a score.<br /><span className="text-white/30">A reason.</span>
+              </h2>
+              <p className="text-white/50 text-xl max-w-2xl mx-auto">
+                SHAP — SHapley Additive Explanations — reveals exactly which factors drove the AI's fraud decision. Based on Nobel-winning game theory.
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-8 mb-12">
+              {/* Without XAI */}
+              <div className="bg-[#111] border border-red-500/20 rounded-2xl p-8">
+                <div className="flex items-center gap-2 mb-6">
+                  <X className="h-4 w-4 text-red-400" />
+                  <p className="text-sm font-bold text-red-400">Without Explainability</p>
+                </div>
+                <div className="space-y-3">
+                  <div className="p-4 bg-white/[0.03] rounded-xl border border-white/5">
+                    <p className="text-white/50 text-sm">AI Output</p>
+                    <p className="text-3xl font-black text-white mt-1">73% Fraud</p>
+                  </div>
+                  <div className="p-4 bg-white/[0.03] rounded-xl border border-white/5">
+                    <p className="text-white/50 text-sm">Why?</p>
+                    <p className="text-2xl font-black text-white/20 mt-1">¯\_(ツ)_/¯</p>
+                  </div>
+                  <p className="text-white/30 text-xs pt-2">Admin makes decision blindly. Customer has no recourse. Legally indefensible.</p>
+                </div>
+              </div>
+
+              {/* With SHAP */}
+              <div className="bg-[#111] border border-emerald-500/20 rounded-2xl p-8">
+                <div className="flex items-center gap-2 mb-6">
+                  <CheckCircle className="h-4 w-4 text-emerald-400" />
+                  <p className="text-sm font-bold text-emerald-400">With SHAP Explainability</p>
                 </div>
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs text-gray-400">
-                    <span>Confidence</span>
-                    <span>72%</span>
-                  </div>
-                  <div className="h-2.5 bg-gray-700/50 rounded-full overflow-hidden">
-                    <div className="h-full w-[72%] bg-gradient-to-r from-gray-400 to-gray-500 rounded-full transition-all duration-500" />
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500">CLM-2024-001234 • Honda City</p>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* How it Works */}
-      <section id="how-it-works" className="py-24 lg:py-32 bg-white">
-        <div className={sectionWrapper}>
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">How It Works</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-lg">
-              Three simple steps from submission to decision. No complexity, no guesswork.
-            </p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8">
-            <Card className="border-0 shadow-lg shadow-gray-200/50 rounded-2xl overflow-hidden hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 group">
-              <CardHeader className="text-center pb-6 pt-8">
-                <div className="mx-auto mb-4 w-16 h-16 rounded-2xl bg-gray-200 flex items-center justify-center group-hover:bg-black transition-colors">
-                  <Camera className="h-8 w-8 text-gray-900 group-hover:text-white transition-colors" />
-                </div>
-                <CardTitle className="text-xl text-gray-900">1. Submit Photos</CardTitle>
-                <CardDescription className="text-gray-600 mt-2 leading-relaxed">
-                  Upload damage photos directly from your phone or computer. Our AI analyzes vehicle damage, detects affected parts, and validates image authenticity in seconds.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 shadow-lg shadow-gray-200/50 rounded-2xl overflow-hidden hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 group">
-              <CardHeader className="text-center pb-6 pt-8">
-                <div className="mx-auto mb-4 w-16 h-16 rounded-2xl bg-gray-200 flex items-center justify-center group-hover:bg-black transition-colors">
-                  <Brain className="h-8 w-8 text-gray-900 group-hover:text-white transition-colors" />
-                </div>
-                <CardTitle className="text-xl text-gray-900">2. AI Analysis</CardTitle>
-                <CardDescription className="text-gray-600 mt-2 leading-relaxed">
-                  YOLO object detection identifies damage regions. CNN models assess severity. Our XGBoost fraud model scores risk in real time.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 shadow-lg shadow-gray-200/50 rounded-2xl overflow-hidden hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 group">
-              <CardHeader className="text-center pb-6 pt-8">
-                <div className="mx-auto mb-4 w-16 h-16 rounded-2xl bg-gray-200 flex items-center justify-center group-hover:bg-black transition-colors">
-                  <CheckCircle2 className="h-8 w-8 text-gray-900 group-hover:text-white transition-colors" />
-                </div>
-                <CardTitle className="text-xl text-gray-900">3. Decision</CardTitle>
-                <CardDescription className="text-gray-600 mt-2 leading-relaxed">
-                  Receive verification, get flagged for manual review, or be routed to a field surveyor. Track every step in your portal.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* Stats */}
-      <section ref={statsRef} className="py-20 lg:py-24 bg-gray-100">
-        <div className={sectionWrapper}>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
-            <div className="text-center p-6 rounded-2xl bg-white shadow-md border border-gray-100">
-              <p className="text-3xl lg:text-4xl font-bold text-gray-900">{claimsProcessed.toLocaleString()}+</p>
-              <p className="text-sm text-gray-600 mt-1 font-medium">Claims processed</p>
-            </div>
-            <div className="text-center p-6 rounded-2xl bg-white shadow-md border border-gray-100">
-              <p className="text-3xl lg:text-4xl font-bold text-gray-900">{avgTime}h</p>
-              <p className="text-sm text-gray-600 mt-1 font-medium">Avg. settlement time</p>
-            </div>
-            <div className="text-center p-6 rounded-2xl bg-white shadow-md border border-gray-100">
-              <p className="text-3xl lg:text-4xl font-bold text-gray-900">{fraudAccuracy}%</p>
-              <p className="text-sm text-gray-600 mt-1 font-medium">Fraud detection accuracy</p>
-            </div>
-            <div className="text-center p-6 rounded-2xl bg-white shadow-md border border-gray-100">
-              <p className="text-3xl lg:text-4xl font-bold text-gray-900">{policyholders.toLocaleString()}+</p>
-              <p className="text-sm text-gray-600 mt-1 font-medium">Policyholders protected</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Features */}
-      <section id="features" className="py-24 lg:py-32 bg-gray-50">
-        <div className={sectionWrapper}>
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">Why SmartClaim</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-lg">
-              Built for speed, transparency, and trust. Every decision is traceable.
-            </p>
-          </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card className="border-0 bg-white shadow-md hover:shadow-lg transition-shadow rounded-xl overflow-hidden group">
-              <CardHeader className="group-hover:bg-gray-50 transition-colors">
-                <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mb-3">
-                  <FileSearch className="h-6 w-6 text-gray-900" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">YOLO + CNN Damage Detection</CardTitle>
-                <CardDescription className="text-gray-600">
-                  AI reads your photos. Damage regions detected and assessed automatically—no manual estimate delays.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 bg-white shadow-md hover:shadow-lg transition-shadow rounded-xl overflow-hidden group">
-              <CardHeader className="group-hover:bg-gray-50 transition-colors">
-                <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mb-3">
-                  <BarChart3 className="h-6 w-6 text-gray-900" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Real-time Fraud Scoring</CardTitle>
-                <CardDescription className="text-gray-600">
-                  XGBoost model flags suspicious patterns. Risk levels and confidence scores shown transparently.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 bg-white shadow-md hover:shadow-lg transition-shadow rounded-xl overflow-hidden group">
-              <CardHeader className="group-hover:bg-gray-50 transition-colors">
-                <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mb-3">
-                  <Users className="h-6 w-6 text-gray-900" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Field Surveyor Network</CardTitle>
-                <CardDescription className="text-gray-600">
-                  Physical verification when needed. Seamless handoff from AI to human for complex cases.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 bg-white shadow-md hover:shadow-lg transition-shadow rounded-xl overflow-hidden group">
-              <CardHeader className="group-hover:bg-gray-50 transition-colors">
-                <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mb-3">
-                  <Eye className="h-6 w-6 text-gray-900" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Transparent Process</CardTitle>
-                <CardDescription className="text-gray-600">
-                  Track every step in your portal. Notifications, timeline, and PDF reports—never left guessing.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* Security & Trust */}
-      <section id="security" className="py-24 lg:py-32 bg-white">
-        <div className={sectionWrapper}>
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">Security & Compliance</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-lg">
-              Your data is protected with enterprise-grade security. We follow industry standards for insurance and financial services.
-            </p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8">
-            <Card className="border-0 shadow-lg rounded-2xl overflow-hidden text-center hover:shadow-xl transition-shadow">
-              <CardHeader className="pt-10 pb-8">
-                <div className="mx-auto w-14 h-14 rounded-2xl bg-gray-200 flex items-center justify-center mb-4">
-                  <Lock className="h-7 w-7 text-gray-700" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Encrypted & Secure</CardTitle>
-                <CardDescription className="text-gray-600 mt-2">
-                  All data encrypted in transit and at rest. Photos and documents stored securely with strict access controls.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 shadow-lg rounded-2xl overflow-hidden text-center hover:shadow-xl transition-shadow">
-              <CardHeader className="pt-10 pb-8">
-                <div className="mx-auto w-14 h-14 rounded-2xl bg-gray-200 flex items-center justify-center mb-4">
-                  <Shield className="h-7 w-7 text-gray-700" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Fraud Prevention</CardTitle>
-                <CardDescription className="text-gray-600 mt-2">
-                  Advanced ML models detect tampering, duplicate claims, and suspicious patterns.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-            <Card className="border-0 shadow-lg rounded-2xl overflow-hidden text-center hover:shadow-xl transition-shadow">
-              <CardHeader className="pt-10 pb-8">
-                <div className="mx-auto w-14 h-14 rounded-2xl bg-gray-200 flex items-center justify-center mb-4">
-                  <Building2 className="h-7 w-7 text-gray-700" />
-                </div>
-                <CardTitle className="text-lg text-gray-900">Insurer-Ready</CardTitle>
-                <CardDescription className="text-gray-600 mt-2">
-                  Built for integration with existing policy systems. APIs, audit logs, and compliance reporting included.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* How the AI Works */}
-      <section className="py-24 lg:py-32 bg-gray-50">
-        <div className={sectionWrapper}>
-          <div className="max-w-3xl mx-auto text-center">
-            <Badge className="mb-6 bg-gray-200 text-gray-800 border-0">How the AI Works</Badge>
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-6">Your Photo → Fair Amount</h2>
-            <p className="text-gray-600 mb-12 text-lg">
-              The amount isn’t arbitrary. AI detects parts, assesses damage, and calculates based on repair costs.
-            </p>
-            <div className="flex flex-wrap justify-center gap-3 sm:gap-6 text-sm">
-              <div className="flex items-center gap-2 bg-white shadow-md border border-gray-100 px-5 py-3 rounded-xl">
-                <span className="font-medium text-gray-700">Your photo</span>
-                <ArrowRight className="h-4 w-4 text-gray-600 shrink-0" />
-              </div>
-              <div className="flex items-center gap-2 bg-white shadow-md border border-gray-100 px-5 py-3 rounded-xl">
-                <span className="font-medium text-gray-700">Parts detected</span>
-                <ArrowRight className="h-4 w-4 text-gray-600 shrink-0" />
-              </div>
-              <div className="flex items-center gap-2 bg-white shadow-md border border-gray-100 px-5 py-3 rounded-xl">
-                <span className="font-medium text-gray-700">Damage assessed</span>
-                <ArrowRight className="h-4 w-4 text-gray-600 shrink-0" />
-              </div>
-              <div className="flex items-center gap-2 bg-white shadow-md border border-gray-100 px-5 py-3 rounded-xl">
-                <span className="font-medium text-gray-700">Amount calculated</span>
-              </div>
-            </div>
-            <p className="text-gray-600 text-sm mt-10 max-w-xl mx-auto leading-relaxed">
-              Our models use millions of labeled images and repair cost data. Results include confidence scores and a clear breakdown you can download as a PDF report.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Testimonials */}
-      <section className="py-24 lg:py-32 bg-white">
-        <div className={sectionWrapper}>
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">What Policyholders Say</h2>
-            <p className="text-gray-600 max-w-2xl mx-auto text-lg">
-              Real feedback from users who’ve experienced the SmartClaim difference.
-            </p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8">
-            <Card className="border border-gray-100 shadow-lg rounded-2xl overflow-hidden">
-              <CardHeader className="relative">
-                <div className="absolute top-6 right-6 flex gap-0.5">
-                  {[...Array(5)].map((_, i) => (
-                    <Sparkles key={i} className="h-4 w-4 fill-gray-400 text-gray-400" />
+                  {[
+                    { label: "Claim filed 3 days after policy",  val: "+33.6%", up: true },
+                    { label: "Base policy type — high risk",      val: "+22.6%", up: true },
+                    { label: "No police report filed",            val: "+18.1%", up: true },
+                    { label: "Driver rating within normal range", val: "−43.1%", up: false },
+                    { label: "Claim filed on weekday",            val: "−22.1%", up: false },
+                  ].map(({ label, val, up }) => (
+                    <div key={label} className={`flex items-center justify-between p-3 rounded-lg border ${up ? "border-red-500/20 bg-red-500/5" : "border-emerald-500/20 bg-emerald-500/5"}`}>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${up ? "bg-red-400" : "bg-emerald-400"}`} />
+                        <p className="text-xs text-white/70">{label}</p>
+                      </div>
+                      <span className={`text-xs font-black font-mono ${up ? "text-red-400" : "text-emerald-400"}`}>{val}</span>
+                    </div>
                   ))}
                 </div>
-                <CardDescription className="text-gray-600 pr-12 leading-relaxed">
-                  "Filed my claim at 9 AM, had a decision by noon. The AI analysis was surprisingly accurate. Best experience with insurance ever."
-                </CardDescription>
-                <div className="flex items-center gap-3 pt-6 mt-4 border-t border-gray-100">
-                  <Avatar className="h-11 w-11 rounded-full bg-gray-200 text-gray-700 font-semibold">
-                    <AvatarFallback>RK</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="font-semibold text-gray-900">Rahul K.</p>
-                    <p className="text-xs text-gray-500">Mumbai</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-            <Card className="border border-gray-100 shadow-lg rounded-2xl overflow-hidden">
-              <CardHeader className="relative">
-                <div className="absolute top-6 right-6 flex gap-0.5">
-                  {[...Array(5)].map((_, i) => (
-                    <Sparkles key={i} className="h-4 w-4 fill-gray-400 text-gray-400" />
-                  ))}
-                </div>
-                <CardDescription className="text-gray-600 pr-12 leading-relaxed">
-                  "No more back-and-forth with adjusters. The portal showed exactly how the amount was calculated. Transparent and fast."
-                </CardDescription>
-                <div className="flex items-center gap-3 pt-6 mt-4 border-t border-gray-100">
-                  <Avatar className="h-11 w-11 rounded-full bg-gray-200 text-gray-700 font-semibold">
-                    <AvatarFallback>PS</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="font-semibold text-gray-900">Priya S.</p>
-                    <p className="text-xs text-gray-500">Bangalore</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-            <Card className="border border-gray-100 shadow-lg rounded-2xl overflow-hidden">
-              <CardHeader className="relative">
-                <div className="absolute top-6 right-6 flex gap-0.5">
-                  {[...Array(5)].map((_, i) => (
-                    <Sparkles key={i} className="h-4 w-4 fill-gray-400 text-gray-400" />
-                  ))}
-                </div>
-                <CardDescription className="text-gray-600 pr-12 leading-relaxed">
-                  "Uploaded 4 photos from my phone. Got a detailed breakdown and PDF report. The field surveyor came within 2 days when needed."
-                </CardDescription>
-                <div className="flex items-center gap-3 pt-6 mt-4 border-t border-gray-100">
-                  <Avatar className="h-11 w-11 rounded-full bg-gray-200 text-gray-700 font-semibold">
-                    <AvatarFallback>AM</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <p className="font-semibold text-gray-900">Amit M.</p>
-                    <p className="text-xs text-gray-500">Delhi</p>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* FAQ */}
-      <section id="faq" className="py-24 lg:py-32 bg-gray-50">
-        <div className={sectionWrapper}>
-          <div className="max-w-3xl mx-auto">
-            <div className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">Frequently Asked Questions</h2>
-              <p className="text-gray-600">Common questions about the claim process.</p>
+              </div>
             </div>
-            <Accordion type="single" collapsible defaultValue="q1" className="w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-              <AccordionItem value="q1" className="border-b px-4 last:border-b-0">
-                <AccordionTrigger>How long does claim processing take?</AccordionTrigger>
-                <AccordionContent>
-                  Most straight-forward claims receive an AI assessment within minutes. Verified claims can be settled in 24–48 hours. Cases requiring field survey may take 3–5 business days.
-                </AccordionContent>
-              </AccordionItem>
-              <AccordionItem value="q2" className="border-b px-4 last:border-b-0">
-                <AccordionTrigger>What documents do I need?</AccordionTrigger>
-                <AccordionContent>
-                  You need clear photos of the damage from multiple angles. For submission, we also collect vehicle registration, driving license number, and a brief description. No physical paperwork is required.
-                </AccordionContent>
-              </AccordionItem>
-              <AccordionItem value="q3" className="border-b px-4 last:border-b-0">
-                <AccordionTrigger>How is the claim amount calculated?</AccordionTrigger>
-                <AccordionContent>
-                  Our AI detects damaged parts, assesses severity, and estimates repair costs using industry benchmarks. The model factors in vehicle make, model, and damage extent. You can see a breakdown in your claim portal.
-                </AccordionContent>
-              </AccordionItem>
-              <AccordionItem value="q4" className="border-b px-4 last:border-b-0">
-                <AccordionTrigger>What happens if I disagree with the decision?</AccordionTrigger>
-                <AccordionContent>
-                  You can request a review. A human adjuster will re-examine your claim, and we may schedule a field survey for verification. Contact support through the portal or email for escalation.
-                </AccordionContent>
-              </AccordionItem>
-              <AccordionItem value="q5" className="border-b px-4 last:border-b-0">
-                <AccordionTrigger>Is my data safe? How do you handle privacy?</AccordionTrigger>
-                <AccordionContent>
-                  Yes. We use encryption, secure storage, and strict access controls. Photos and personal data are only used for claim processing. We comply with data protection regulations and do not share your information with third parties for marketing.
-                </AccordionContent>
-              </AccordionItem>
-              <AccordionItem value="q6" className="border-b-0 px-4">
-                <AccordionTrigger>Can I track my claim in real time?</AccordionTrigger>
-                <AccordionContent>
-                  Absolutely. Your portal shows a timeline of every status change, from submission to final decision. You’ll receive notifications when your claim moves to a new stage, when a surveyor is assigned, or when a report is ready to download.
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
+
+            {/* SHAP bar chart */}
+            <div className="bg-[#111] border border-white/10 rounded-2xl p-8">
+              <p className="text-sm font-bold text-white/60 mb-6">SHAP Impact Visualization — Feature Contribution to Fraud Score</p>
+              <div className="space-y-3">
+                {[
+                  { feature: "Days since policy start",  shap: 0.336, dir: "fraud" },
+                  { feature: "Driver rating",             shap: 0.431, dir: "legit" },
+                  { feature: "Base policy type",          shap: 0.226, dir: "fraud" },
+                  { feature: "Policy number pattern",     shap: 0.452, dir: "legit" },
+                  { feature: "No police report",          shap: 0.181, dir: "fraud" },
+                  { feature: "Week of month claimed",     shap: 0.318, dir: "legit" },
+                  { feature: "Past number of claims",     shap: 0.143, dir: "fraud" },
+                  { feature: "Rep number",                shap: 0.271, dir: "legit" },
+                ].map(({ feature, shap, dir }) => (
+                  <div key={feature} className="flex items-center gap-4">
+                    <span className="text-xs text-white/40 w-52 text-right flex-shrink-0 truncate">{feature}</span>
+                    <div className="flex-1 flex items-center">
+                      {dir === "legit" ? (
+                        <div className="flex items-center w-full">
+                          <div className="flex-1 h-5 bg-white/5 rounded-r-none rounded-l overflow-hidden flex justify-end">
+                            <div className="h-full bg-emerald-500/60 rounded-l" style={{ width: `${shap * 100}%` }} />
+                          </div>
+                          <div className="w-px h-5 bg-white/20" />
+                          <div className="flex-1 h-5 bg-white/5 rounded-l-none rounded-r" />
+                        </div>
+                      ) : (
+                        <div className="flex items-center w-full">
+                          <div className="flex-1 h-5 bg-white/5 rounded-r-none rounded-l" />
+                          <div className="w-px h-5 bg-white/20" />
+                          <div className="flex-1 h-5 bg-white/5 rounded-l-none rounded-r overflow-hidden">
+                            <div className="h-full bg-red-500/60 rounded-r" style={{ width: `${shap * 100}%` }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <span className={`text-xs font-mono w-14 flex-shrink-0 ${dir === "fraud" ? "text-red-400" : "text-emerald-400"}`}>
+                      {dir === "fraud" ? "+" : "−"}{(shap * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center gap-4 pt-2 border-t border-white/5">
+                  <span className="text-xs text-white/20 w-52 text-right">← Reduces fraud risk</span>
+                  <div className="flex-1 flex justify-center"><div className="w-px h-4 bg-white/20" /></div>
+                  <span className="text-xs text-white/20 w-14">Increases →</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* CTA Banner */}
-      <section className="py-24 lg:py-32 bg-black text-white relative overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_100%,rgba(255,255,255,0.1),transparent)]" />
-        <div className={`${sectionWrapper} text-center relative`}>
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">Ready to file your claim?</h2>
-          <p className="text-gray-400 mb-10 max-w-xl mx-auto text-lg">
-            Join thousands of policyholders who have streamlined their claim experience.
+      {/* ── FUSION ── */}
+      <section className="py-32 px-6 border-t border-white/5">
+        <div ref={fusionRef} className="max-w-6xl mx-auto">
+          <div className={`transition-all duration-700 ${fusionInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+            <div className="text-xs font-bold tracking-widest text-amber-400 uppercase mb-4">The Formula</div>
+            <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-6">
+              Three models.<br /><span className="text-white/30">One verdict.</span>
+            </h2>
+            <p className="text-white/50 text-lg mb-16 max-w-2xl">The Fusion Score combines YOLO damage evidence, CNN severity analysis, and XGBoost fraud probability into a single defensible claim decision.</p>
+
+            <div className="grid md:grid-cols-3 gap-6 mb-8">
+              {[
+                { model: "YOLO", role: "Parts & Damage", output: "₹52,400 base", icon: Camera, color: "blue" },
+                { model: "CNN",  role: "Severity Score", output: "1.67× multiplier", icon: Layers, color: "violet" },
+                { model: "XGBoost", role: "Fraud Score", output: "73% fraud risk", icon: BarChart3, color: "red" },
+              ].map(({ model, role, output, icon: Icon, color }) => (
+                <div key={model} className={`bg-[#111] border border-${color}-500/20 rounded-2xl p-6`}>
+                  <Icon className={`h-6 w-6 text-${color}-400 mb-4`} />
+                  <p className={`text-xs font-bold text-${color}-400 uppercase tracking-wider mb-1`}>{model}</p>
+                  <p className="text-white font-semibold mb-3">{role}</p>
+                  <p className={`text-lg font-black text-${color}-300`}>{output}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-4 mb-8">
+              <div className="flex-1 h-px bg-white/10" />
+              <span className="text-white/30 text-sm">combined into</span>
+              <div className="flex-1 h-px bg-white/10" />
+            </div>
+
+            <div className="bg-gradient-to-r from-amber-500/10 to-amber-600/5 border border-amber-500/20 rounded-2xl p-8 text-center">
+              <p className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2">Final Claim Decision</p>
+              <div className="flex items-center justify-center gap-8 flex-wrap">
+                <div>
+                  <p className="text-5xl font-black text-white">₹87,500</p>
+                  <p className="text-xs text-white/40 mt-1">Calculated claim amount</p>
+                </div>
+                <div className="w-px h-12 bg-white/10" />
+                <div>
+                  <p className="text-5xl font-black text-red-400">73%</p>
+                  <p className="text-xs text-white/40 mt-1">Fraud probability</p>
+                </div>
+                <div className="w-px h-12 bg-white/10" />
+                <div>
+                  <p className="text-2xl font-black text-amber-400">Flagged</p>
+                  <p className="text-xs text-white/40 mt-1">Admin review required</p>
+                </div>
+              </div>
+              <p className="text-white/30 text-xs mt-6">+ Full SHAP explanation available · PDF report generated · Claim history logged</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── STATS ── */}
+      <section id="impact" className="py-32 px-6 border-t border-white/5 bg-[#0d0d0d]">
+        <div ref={statsRef} className="max-w-6xl mx-auto">
+          <div className="text-xs font-bold tracking-widest text-white/30 uppercase mb-4">Impact</div>
+          <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-16">Numbers that matter.</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {[
+              { value: `${claims.toLocaleString()}+`, label: "Claims Processed", sub: "and counting" },
+              { value: `${accuracy}%`,               label: "Fraud Detection Accuracy", sub: "vs 60% industry avg" },
+              { value: `₹${saved.toLocaleString()}Cr`, label: "Fraud Prevented Annually", sub: "across Indian insurers" },
+              { value: `${speed}s`,                  label: "Average Analysis Time", sub: "vs 3 weeks traditional" },
+            ].map(({ value, label, sub }) => (
+              <div key={label} className="bg-[#111] border border-white/8 rounded-2xl p-6 md:p-8">
+                <p className="text-3xl md:text-4xl font-black text-white mb-2">{value}</p>
+                <p className="text-white/60 font-semibold text-sm mb-1">{label}</p>
+                <p className="text-white/25 text-xs">{sub}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CTA ── */}
+      <section className="py-32 px-6 border-t border-white/5">
+        <div className="max-w-4xl mx-auto text-center">
+          <h2 className="text-5xl md:text-7xl font-black tracking-tighter mb-6">
+            Ready to file<br />
+            <span style={{ WebkitTextStroke: "1px rgba(255,255,255,0.3)", color: "transparent" }}>your claim?</span>
+          </h2>
+          <p className="text-white/40 text-xl mb-10">Join thousands of policyholders who get decisions in hours, not weeks.</p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Link href="/register" className="inline-flex items-center gap-2 bg-white text-black font-black px-10 py-5 rounded-xl hover:bg-gray-100 transition-all text-base">
+              File a Claim Now <ArrowRight className="h-5 w-5" />
+            </Link>
+            <Link href="/login" className="inline-flex items-center gap-2 border border-white/20 text-white/60 hover:text-white hover:border-white/40 font-medium px-10 py-5 rounded-xl transition-all text-base">
+              Admin Login
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer className="border-t border-white/5 py-12 px-6">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 bg-white rounded-lg flex items-center justify-center">
+              <Shield className="h-3.5 w-3.5 text-black" />
+            </div>
+            <span className="font-bold text-white">SmartClaim AI</span>
+          </div>
+          <p className="text-white/20 text-xs text-center">
+            Transparent · Explainable · Automated · © {new Date().getFullYear()} SmartClaim AI. All rights reserved.
           </p>
-          <Button asChild size="lg" className="bg-white text-gray-900 hover:bg-gray-100 font-semibold h-14 px-10 rounded-xl shadow-xl">
-            <Link href="/register">Sign Up Now</Link>
-          </Button>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="border-t border-gray-200 bg-gray-900 text-gray-300 py-16">
-        <div className={sectionWrapper}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12">
-            <div className="lg:col-span-2">
-              <div className="flex items-center gap-2.5 font-bold text-white mb-4">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-700 text-white">
-                  <Shield className="h-5 w-5" />
-                </div>
-                SmartClaim
-              </div>
-              <p className="text-sm text-gray-400 max-w-md mb-6 leading-relaxed">
-                AI-powered insurance claims platform. Submit photos, get instant AI assessment, and track your claim from submission to settlement. Built for insurers and policyholders.
-              </p>
-              <Badge className="bg-gray-700 text-gray-300 border-0">Powered by AI fraud detection</Badge>
-            </div>
-            <div>
-              <p className="font-semibold text-white text-sm mb-4">Product</p>
-              <div className="flex flex-col gap-3">
-                <Link href="#how-it-works" className="text-sm text-gray-400 hover:text-white transition-colors">How it Works</Link>
-                <Link href="#features" className="text-sm text-gray-400 hover:text-white transition-colors">Features</Link>
-                <Link href="#security" className="text-sm text-gray-400 hover:text-white transition-colors">Security</Link>
-                <Link href="#faq" className="text-sm text-gray-400 hover:text-white transition-colors">FAQ</Link>
-              </div>
-            </div>
-            <div>
-              <p className="font-semibold text-white text-sm mb-4">Account</p>
-              <div className="flex flex-col gap-3">
-                <Link href="/login" className="text-sm text-gray-400 hover:text-white transition-colors">Login</Link>
-                <Link href="/register" className="text-sm text-gray-400 hover:text-white transition-colors">Register</Link>
-              </div>
-              <p className="font-semibold text-white text-sm mt-8 mb-3">Contact</p>
-              <p className="text-sm text-gray-400">support@smartclaim.com</p>
-              <p className="text-sm text-gray-400">+91 1800-XXX-XXXX</p>
-            </div>
+          <div className="flex gap-6 text-xs text-white/30">
+            <Link href="/login" className="hover:text-white transition-colors">Login</Link>
+            <Link href="/register" className="hover:text-white transition-colors">Register</Link>
           </div>
-          <Separator className="my-12 border-gray-700" />
-          <p className="text-center text-sm text-gray-500">© {new Date().getFullYear()} SmartClaim. All rights reserved.</p>
         </div>
       </footer>
     </div>
+  );
+}
+
+// Fix: add X import used in component
+function X({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
   );
 }

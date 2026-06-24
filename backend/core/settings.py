@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-gp$1uqfva&)xetr=ydr(k)w#1o4yett1!o#qjd^+w6-i+!pcc#
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 
 # Application definition
@@ -57,19 +57,21 @@ REST_FRAMEWORK = {
 }
 
 MIDDLEWARE = [
+    'core.middleware.AppendSlashMiddleware',  # Must be first — normalises paths before URL matching
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Must be before CommonMiddleware
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # your frontend URL
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://192.168.34.88:3000",  # Allow frontend network access
 ]
 
 CORS_ALLOW_CREDENTIALS = True

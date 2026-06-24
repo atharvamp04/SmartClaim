@@ -1,13 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
     CheckCircle, XCircle, AlertTriangle, Clock, Search,
     Bell, FileDown, LogOut, Loader2,
     RefreshCw, ChevronDown, ChevronUp, ShieldCheck,
-    FileText, TrendingUp, Menu, ArrowRight, Activity, ListChecks, User
+    FileText, TrendingUp, Menu, ArrowRight, Activity, ListChecks, User, MessageCircle, X
 } from "lucide-react";
+
+import {
+    ResizableHandle,
+    ResizablePanel,
+    ResizablePanelGroup,
+} from "@/components/ui/resizable";
 
 // Shadcn Components
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -19,17 +25,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
     Drawer,
     DrawerClose,
@@ -41,8 +36,9 @@ import {
     DrawerTrigger,
 } from "@/components/ui/drawer";
 import ClaimTimeline from "@/components/ClaimTimeline";
+import CustomerChatAppointment from "@/components/CustomerChatAppointment";
 
-const API_BASE = "http://127.0.0.1:8000/api/detection";
+const API_BASE = `/api/detection`;
 
 type NotificationType = "success" | "error" | "warning" | "info" | "pending";
 
@@ -99,6 +95,8 @@ interface Claim {
     admin_notes: string | null;
     rejection_reason: string | null;
     has_report: boolean;
+    assigned_surveyor?: string;
+    assigned_surveyor_name?: string;
 }
 
 const formatINR = (amount: number) =>
@@ -115,6 +113,7 @@ function CustomerAccountPageContent() {
     const [username, setUsername] = useState("");
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [claims, setClaims] = useState<Claim[]>([]);
     const [unreadCount, setUnreadCount] = useState(0);
@@ -123,6 +122,7 @@ function CustomerAccountPageContent() {
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedId, setExpandedId] = useState<number | null>(null);
     const [selectedTimelineClaimId, setSelectedTimelineClaimId] = useState<number | null>(null);
+    const [selectedCommunicationClaimId, setSelectedCommunicationClaimId] = useState<number | null>(null);
     const [policyholderData, setPolicyholderData] = useState<PolicyholderData | null>(null);
 
     useEffect(() => {
@@ -130,21 +130,76 @@ function CustomerAccountPageContent() {
     }, []);
 
     const checkAuth = async () => {
+        console.log("=== CUSTOMER AUTH CHECK START ===");
+        
         const token = localStorage.getItem("access_token");
         const user = localStorage.getItem("username");
+        const userRole = localStorage.getItem("user_role");
+        
+        console.log("Customer auth check:", { 
+            hasToken: !!token, 
+            tokenLength: token?.length,
+            user, 
+            userRole,
+            allLocalStorage: { 
+                access_token: token?.substring(0, 20) + "...", 
+                username: user, 
+                user_role: userRole 
+            }
+        });
+        
         if (!token || !user) {
+            console.log("Missing token or user, redirecting to login");
+            console.log("Token exists:", !!token);
+            console.log("User exists:", !!user);
+            console.log("Full localStorage:", {
+                access_token: localStorage.getItem("access_token"),
+                username: localStorage.getItem("username"),
+                user_role: localStorage.getItem("user_role")
+            });
+            console.log("=== CUSTOMER AUTH CHECK END - REDIRECT ===");
             router.push("/login");
             return;
         }
+        
+        // Check if user is a customer or if role is not set (default to customer)
+        if (userRole && userRole.toLowerCase() !== 'customer') {
+            console.log(`User role is '${userRole}', redirecting to appropriate page`);
+            // Redirect to appropriate page based on role
+            switch (userRole.toLowerCase()) {
+                case 'admin':
+                    console.log("Redirecting to admin");
+                    router.push("/admin");
+                    break;
+                case 'surveyor':
+                    console.log("Redirecting to surveyor");
+                    router.push("/surveyor");
+                    break;
+                default:
+                    // If role is unrecognized, allow access to customer as fallback
+                    console.log("Unrecognized role '${userRole}', allowing customer access as fallback");
+                    break;
+            }
+            console.log("=== CUSTOMER AUTH CHECK END - ROLE REDIRECT ===");
+            return;
+        }
+        
+        console.log("User authenticated as customer, proceeding to fetch data");
         setUsername(user);
         await fetchData();
+        console.log("=== CUSTOMER AUTH CHECK END - SUCCESS ===");
     };
 
     const fetchData = useCallback(async () => {
         try {
             const token = localStorage.getItem("access_token");
-            if (!token) return;
+            if (!token) {
+                console.log("No token found in fetchData");
+                return;
+            }
 
+            console.log("Fetching customer data...");
+            
             const [notifsRes, claimsRes] = await Promise.all([
                 fetch(`${API_BASE}/customer/notifications/`, {
                     headers: { Authorization: `Bearer ${token}` },
@@ -154,15 +209,32 @@ function CustomerAccountPageContent() {
                 }),
             ]);
 
+            console.log("API responses:", { 
+                notificationsStatus: notifsRes.status, 
+                claimsStatus: claimsRes.status 
+            });
+
             if (notifsRes.ok) {
                 const notifsData = await notifsRes.json();
                 setNotifications(notifsData.notifications || []);
                 setUnreadCount(notifsData.unread_count || 0);
+            } else {
+                console.error("Notifications API error:", notifsRes.status, await notifsRes.text());
             }
 
             if (claimsRes.ok) {
                 const claimsData = await claimsRes.json();
                 setClaims(claimsData.claims || []);
+            } else {
+                console.error("Claims API error:", claimsRes.status, await claimsRes.text());
+                if (claimsRes.status === 401) {
+                    console.log("Unauthorized, clearing token and redirecting to login");
+                    localStorage.removeItem("access_token");
+                    localStorage.removeItem("username");
+                    localStorage.removeItem("user_role");
+                    router.push("/login");
+                    return;
+                }
             }
 
             // Fetch policyholder data for "View Info" drawer
@@ -176,7 +248,12 @@ function CustomerAccountPageContent() {
                 } catch (_) { /* ignore */ }
             }
         } catch (error) {
-            console.error("Error fetching data:", error);
+            console.error("Error in fetchData:", error);
+            if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+                setError("Network error: Unable to connect to the backend server. Please ensure the Django server is running on http://127.0.0.1:8000");
+            } else {
+                setError("An error occurred while fetching data. Please try again.");
+            }
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -189,7 +266,7 @@ function CustomerAccountPageContent() {
     };
 
     const handleNewClaim = () => {
-        router.push("/claim-draft");
+        router.push("/claim");
     };
 
     const handleLogout = () => {
@@ -222,6 +299,30 @@ function CustomerAccountPageContent() {
         }
     };
 
+    const handleResubmit = async (claimId: number) => {
+        try {
+            const token = localStorage.getItem("access_token");
+            const response = await fetch(`${API_BASE}/claims/${claimId}/resubmit/`, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            });
+            
+            if (response.ok) {
+                alert("Claim successfully resubmitted for verification.");
+                handleRefresh();
+            } else {
+                const data = await response.json();
+                alert(`Error: ${data.error || "Failed to resubmit claim."}`);
+            }
+        } catch (error) {
+            console.error("Error resubmitting claim:", error);
+            alert("An error occurred while resubmitting.");
+        }
+    };
+
     const filteredClaims = claims.filter(
         (claim) =>
             claim.claim_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -249,6 +350,32 @@ function CustomerAccountPageContent() {
         );
     }
 
+    if (error) {
+        return (
+            <div className="flex w-full min-h-screen bg-background">
+                <div className="flex-1 flex items-center justify-center">
+                    <div className="space-y-4 w-full max-w-md px-4 text-center">
+                        <AlertTriangle className="h-16 w-16 text-red-500 mx-auto" />
+                        <h2 className="text-2xl font-bold text-gray-900">Connection Error</h2>
+                        <p className="text-gray-600">{error}</p>
+                        <div className="space-y-2">
+                            <p className="text-sm text-gray-500">To fix this issue:</p>
+                            <ul className="text-sm text-gray-600 text-left space-y-1">
+                                <li>• Make sure the Django backend server is running</li>
+                                <li>• Check that the server is running on http://127.0.0.1:8000</li>
+                                <li>• Verify your internet connection</li>
+                                <li>• Try refreshing the page</li>
+                            </ul>
+                        </div>
+                        <Button onClick={() => window.location.reload()} className="mt-4">
+                            Refresh Page
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     function getStatusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
         const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
             "Verified": "default",
@@ -268,14 +395,10 @@ function CustomerAccountPageContent() {
                 <div className="flex items-center justify-between px-4 lg:px-8 py-4">
                     <div>
                         <h1 className="font-semibold text-lg">
-                            {activeView === "notifications" ? "Notifications" : "My Claims"}
+                            My Claims
                         </h1>
                         <p className="text-sm text-muted-foreground">
-                            {activeView === "notifications"
-                                ? unreadCount > 0
-                                    ? `${unreadCount} unread update${unreadCount !== 1 ? "s" : ""}`
-                                    : "All caught up"
-                                : `${claims.length} claim${claims.length !== 1 ? "s" : ""} on file`}
+                            {`${claims.length} claim${claims.length !== 1 ? "s" : ""} on file`}
                         </p>
                     </div>
 
@@ -319,7 +442,7 @@ function CustomerAccountPageContent() {
                                                             <dt className="text-xs font-medium text-muted-foreground">
                                                                 {formatPolicyholderKey(key)}
                                                             </dt>
-                                                            <dd className="text-sm font-semibold">{displayValue}</dd>
+                                                            <dd className="text-sm font-semibold">{String(displayValue)}</dd>
                                                         </div>
                                                     );
                                                 };
@@ -356,8 +479,9 @@ function CustomerAccountPageContent() {
             </div>
 
             {/* Main Content */}
-            <div className="flex-1 overflow-y-auto">
-                <div className="max-w-5xl mx-auto px-4 lg:px-8 py-6 space-y-6">
+            <ResizablePanelGroup direction="horizontal" className="flex-1 overflow-hidden">
+                <ResizablePanel defaultSize={selectedCommunicationClaimId ? 65 : 100} minSize={30} className="h-full overflow-y-auto">
+                    <div className="max-w-5xl mx-auto px-4 lg:px-8 py-6 space-y-6">
                     {/* Stats Cards */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <Card>
@@ -401,63 +525,8 @@ function CustomerAccountPageContent() {
                         </Card>
                     </div>
 
-                    {/* Tabs */}
-                    <Tabs value={activeView} onValueChange={(v) => setActiveView(v as "notifications" | "claims")}>
-                        <TabsList className="grid w-full grid-cols-2">
-                            <TabsTrigger value="notifications">
-                                <Bell className="h-4 w-4 mr-2" />
-                                Notifications
-                            </TabsTrigger>
-                            <TabsTrigger value="claims">
-                                <FileText className="h-4 w-4 mr-2" />
-                                Claims
-                            </TabsTrigger>
-                        </TabsList>
-
-                        {/* Notifications Tab */}
-                        <TabsContent value="notifications" className="space-y-4">
-                            {notifications.length === 0 ? (
-                                <Card>
-                                    <CardContent className="flex flex-col items-center justify-center py-12">
-                                        <Bell className="h-12 w-12 text-muted-foreground mb-4" />
-                                        <h3 className="font-semibold mb-1">No notifications</h3>
-                                        <p className="text-sm text-muted-foreground">
-                                            Claim decisions will appear here
-                                        </p>
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <div className="space-y-4">
-                                    {notifications.map((notif) => (
-                                        <Card key={notif.claim_id}>
-                                            <CardHeader className="pb-3">
-                                                <div className="flex items-start justify-between">
-                                                    <div className="space-y-1">
-                                                        <CardTitle className="text-sm">{notif.title}</CardTitle>
-                                                        <p className="text-sm text-muted-foreground">
-                                                            {notif.claim_number}
-                                                        </p>
-                                                    </div>
-                                                    <Badge variant={notif.type === "success" ? "default" : notif.type === "error" ? "destructive" : "secondary"}>
-                                                        {notif.status}
-                                                    </Badge>
-                                                </div>
-                                            </CardHeader>
-                                            <CardContent className="space-y-3">
-                                                <p className="text-sm">{notif.message}</p>
-                                                <p className="text-xs text-muted-foreground">
-                                                    {new Date(notif.updated_at).toLocaleDateString()}
-                                                </p>
-                                            </CardContent>
-                                        </Card>
-                                    ))}
-                                </div>
-                            )}
-                        </TabsContent>
-
-                        {/* Claims Tab */}
-                        <TabsContent value="claims" className="space-y-4">
-                            <div className="flex flex-col md:flex-row gap-4">
+                    <div className="space-y-4 pt-2">
+                        <div className="flex flex-col md:flex-row gap-4">
                                 <div className="flex-1 relative">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                     <Input
@@ -484,175 +553,158 @@ function CustomerAccountPageContent() {
                                     </CardContent>
                                 </Card>
                             ) : (
-                                <>
-                                    {/* Desktop Table */}
-                                    <div className="hidden md:block rounded-lg border overflow-hidden">
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow>
-                                                    <TableHead>Claim</TableHead>
-                                                    <TableHead>Amount</TableHead>
-                                                    <TableHead>Risk</TableHead>
-                                                    <TableHead>Status</TableHead>
-                                                    <TableHead>Submitted</TableHead>
-                                                    <TableHead>Actions</TableHead>
-                                                </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                                {filteredClaims.map((claim) => (
-                                                    <TableRow key={claim.id}>
-                                                        <TableCell className="font-mono text-sm">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {filteredClaims.map((claim) => (
+                                        <Card key={claim.id} className="flex flex-col shadow-sm hover:shadow-md transition-shadow">
+                                            <CardHeader className="pb-3 border-b border-border/50">
+                                                <div className="flex items-start justify-between">
+                                                    <div>
+                                                        <CardTitle className="text-sm font-mono flex items-center gap-2">
                                                             {claim.claim_number}
                                                             {claim.fraud_detected && (
-                                                                <Badge variant="destructive" className="ml-2">
-                                                                    Flagged
-                                                                </Badge>
+                                                                <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">Flagged</Badge>
                                                             )}
-                                                        </TableCell>
-                                                        <TableCell>{formatINR(claim.claim_amount)}</TableCell>
-                                                        <TableCell>
-                                                            <Badge
-                                                                variant={
-                                                                    claim.risk_level === "HIGH"
-                                                                        ? "destructive"
-                                                                        : claim.risk_level === "MEDIUM"
-                                                                          ? "secondary"
-                                                                          : "outline"
-                                                                }
-                                                            >
-                                                                {claim.risk_level}
-                                                            </Badge>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <Badge variant={getStatusVariant(claim.status)}>
-                                                                {claim.status}
-                                                            </Badge>
-                                                        </TableCell>
-                                                        <TableCell className="text-sm text-muted-foreground">
+                                                        </CardTitle>
+                                                        <p className="text-xs text-muted-foreground mt-1">
                                                             {claim.submitted_at
                                                                 ? new Date(claim.submitted_at).toLocaleDateString()
                                                                 : "—"}
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <div className="flex gap-2">
-                                                                <Button
-                                                                    variant="outline"
-                                                                    size="sm"
-                                                                    onClick={() => setSelectedTimelineClaimId(claim.id)}
-                                                                >
-                                                                    <ListChecks className="h-3 w-3 mr-1" />
-                                                                    Timeline
-                                                                </Button>
-                                                                {claim.has_report && (
-                                                                    <Button
-                                                                        variant="outline"
-                                                                        size="sm"
-                                                                        onClick={() => handleDownloadPdf(claim.id, claim.claim_number)}
-                                                                        disabled={downloadingId === claim.id}
-                                                                    >
-                                                                        <FileDown className="h-3 w-3 mr-1" />
-                                                                        PDF
-                                                                    </Button>
-                                                                )}
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ))}
-                                            </TableBody>
-                                        </Table>
-                                    </div>
-
-                                    {/* Mobile Cards */}
-                                    <div className="md:hidden space-y-4">
-                                        {filteredClaims.map((claim) => (
-                                            <Card key={claim.id}>
-                                                <CardHeader className="pb-3">
-                                                    <div className="flex items-start justify-between">
-                                                        <div>
-                                                            <CardTitle className="text-sm font-mono">
-                                                                {claim.claim_number}
-                                                            </CardTitle>
-                                                            <p className="text-xs text-muted-foreground mt-1">
-                                                                {claim.submitted_at
-                                                                    ? new Date(claim.submitted_at).toLocaleDateString()
-                                                                    : "—"}
-                                                            </p>
-                                                        </div>
-                                                        <Badge variant={getStatusVariant(claim.status)}>
-                                                            {claim.status}
+                                                        </p>
+                                                    </div>
+                                                    <Badge variant={getStatusVariant(claim.status)}>
+                                                        {claim.status}
+                                                    </Badge>
+                                                </div>
+                                            </CardHeader>
+                                            <CardContent className="pt-4 flex-1 flex flex-col justify-between space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="text-xs text-muted-foreground mb-1">Assessed Amount</p>
+                                                        <p className="text-base font-semibold">
+                                                            {formatINR(claim.claim_amount)}
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-xs text-muted-foreground mb-1">Risk Level</p>
+                                                        <Badge variant={
+                                                            claim.risk_level === "HIGH" ? "destructive" : 
+                                                            claim.risk_level === "MEDIUM" ? "secondary" : "outline"
+                                                        }>
+                                                            {claim.risk_level}
                                                         </Badge>
                                                     </div>
-                                                </CardHeader>
-                                                <CardContent className="space-y-3">
-                                                    <div className="flex items-start justify-between">
-                                                        <div>
-                                                            <p className="text-sm font-semibold">
-                                                                {formatINR(claim.claim_amount)}
-                                                            </p>
-                                                            <Badge className="mt-2" variant="outline">
-                                                                {claim.risk_level} risk
-                                                            </Badge>
-                                                        </div>
-                                                        <div className="space-y-2">
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="w-full"
-                                                                onClick={() => setSelectedTimelineClaimId(claim.id)}
-                                                            >
-                                                                <ListChecks className="h-3 w-3 mr-1" />
-                                                                Timeline
-                                                            </Button>
-                                                            {claim.has_report && (
-                                                                <Button
-                                                                    variant="outline"
-                                                                    size="sm"
-                                                                    className="w-full"
-                                                                    onClick={() => handleDownloadPdf(claim.id, claim.claim_number)}
-                                                                    disabled={downloadingId === claim.id}
-                                                                >
-                                                                    <FileDown className="h-3 w-3 mr-1" />
-                                                                    PDF
-                                                                </Button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    {claim.rejection_reason && (
-                                                        <>
-                                                            <Separator />
-                                                            <Alert variant="destructive">
-                                                                <AlertTriangle className="h-4 w-4" />
-                                                                <AlertDescription>
-                                                                    {claim.rejection_reason}
-                                                                </AlertDescription>
-                                                            </Alert>
-                                                        </>
-                                                    )}
-                                                </CardContent>
-                                            </Card>
-                                        ))}
-                                    </div>
-                                </>
-                            )}
-                        </TabsContent>
-                    </Tabs>
-                </div>
+                                                </div>
+                                                
+                                                {claim.rejection_reason && (
+                                                    <Alert variant="destructive" className="py-2.5 px-3">
+                                                        <AlertTriangle className="h-3.5 w-3.5" />
+                                                        <AlertDescription className="text-xs ml-2">
+                                                            {claim.rejection_reason}
+                                                        </AlertDescription>
+                                                    </Alert>
+                                                )}
 
-                {/* Timeline Drawer */}
-                <Sheet open={selectedTimelineClaimId !== null} onOpenChange={(open) => !open && setSelectedTimelineClaimId(null)}>
-                    <SheetContent side="right" className="w-full sm:w-[600px] overflow-y-auto">
-                        <SheetHeader className="mb-6">
-                            <SheetTitle>Claim Status Timeline</SheetTitle>
-                        </SheetHeader>
-                        {selectedTimelineClaimId && (
-                            <ClaimTimeline
-                                claimId={selectedTimelineClaimId}
-                                onClose={() => setSelectedTimelineClaimId(null)}
-                            />
-                        )}
-                    </SheetContent>
-                </Sheet>
-            </div>
+                                                <div className="grid grid-cols-2 gap-2 mt-auto pt-3">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="w-full text-xs"
+                                                        onClick={() => setSelectedTimelineClaimId(claim.id)}
+                                                    >
+                                                        <ListChecks className="h-3.5 w-3.5 mr-1" />
+                                                        Timeline
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="w-full text-xs"
+                                                        onClick={() => setSelectedCommunicationClaimId(claim.id)}
+                                                        disabled={!claim.assigned_surveyor}
+                                                    >
+                                                        <MessageCircle className="h-3.5 w-3.5 mr-1" />
+                                                        Chat
+                                                    </Button>
+                                                    {claim.has_report && (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="w-full text-xs col-span-1"
+                                                            onClick={() => handleDownloadPdf(claim.id, claim.claim_number)}
+                                                            disabled={downloadingId === claim.id}
+                                                        >
+                                                            <FileDown className="h-3.5 w-3.5 mr-1" />
+                                                            PDF
+                                                        </Button>
+                                                    )}
+                                                    {claim.status === "Rejected" && (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="w-full text-xs col-span-1"
+                                                            onClick={() => handleResubmit(claim.id)}
+                                                        >
+                                                            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                                                            Appeal
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </ResizablePanel>
+
+                {selectedCommunicationClaimId && (
+                    <>
+                        <ResizableHandle withHandle />
+                        <ResizablePanel defaultSize={35} minSize={25} className="h-full flex flex-col bg-muted/10 border-l relative overflow-hidden">
+                            {/* Header with Close Icon */}
+                            <div className="flex items-center justify-between p-4 border-b bg-background shrink-0">
+                                <h3 className="font-semibold text-sm flex items-center gap-2">
+                                    <MessageCircle className="h-4 w-4 text-blue-600" />
+                                    Chat & Appointments
+                                </h3>
+                                <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-8 w-8 rounded-full" 
+                                    onClick={() => setSelectedCommunicationClaimId(null)}
+                                >
+                                    <X className="h-4 w-4" />
+                                </Button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto min-h-0 w-full relative">
+                                <CustomerChatAppointment 
+                                    claim={{
+                                        id: selectedCommunicationClaimId,
+                                        claim_number: claims.find(c => c.id === selectedCommunicationClaimId)?.claim_number || '',
+                                        status: claims.find(c => c.id === selectedCommunicationClaimId)?.status || '',
+                                        assigned_surveyor_name: claims.find(c => c.id === selectedCommunicationClaimId)?.assigned_surveyor_name || ''
+                                    }} 
+                                />
+                            </div>
+                        </ResizablePanel>
+                    </>
+                )}
+            </ResizablePanelGroup>
+
+            {/* Timeline Drawer */}
+            <Sheet open={selectedTimelineClaimId !== null} onOpenChange={(open) => !open && setSelectedTimelineClaimId(null)}>
+                <SheetContent side="right" className="w-full sm:w-[600px] overflow-y-auto">
+                    <SheetHeader className="mb-6">
+                        <SheetTitle>Claim Status Timeline</SheetTitle>
+                    </SheetHeader>
+                    {selectedTimelineClaimId && (
+                        <ClaimTimeline
+                            claimId={selectedTimelineClaimId}
+                            onClose={() => setSelectedTimelineClaimId(null)}
+                        />
+                    )}
+                </SheetContent>
+            </Sheet>
         </div>
     );
 }
