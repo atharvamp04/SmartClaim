@@ -378,7 +378,3 @@ All endpoints are prefixed with `/api/detection/`.
 - **Gmail App Password** — Must be the 16-character code **without spaces**. Passwords are invalidated if you change your Google account password.
 
 ---
-
-## License
-
-This project is built for academic and demonstration purposes.
